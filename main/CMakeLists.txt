@@ -1,0 +1,44 @@
+idf_component_register(
+    SRCS
+        "main.cc"
+        "boards/zhengchen-minicam/board.cc"
+        "app/app_state.cc"
+        "app/app_controller.cc"
+        "ui/ui.cc"
+        "meet/meet_nvs.cc"
+        "meet/meet_api.cc"
+        "meet/meet_realtime.cc"
+        "audio/pcm_pipeline.cc"
+        "audio/wake_word.cc"
+    INCLUDE_DIRS
+        "."
+        "boards/zhengchen-minicam"
+        "app"
+        "ui"
+        "meet"
+        "audio"
+    REQUIRES
+        nvs_flash
+        esp_event
+        esp_netif
+        esp_wifi
+        esp_http_client
+        esp_https_ota
+        espressif__esp_websocket_client
+        esp_lcd
+        esp_adc
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_spi
+        esp_driver_ledc
+        driver
+        espressif__cjson
+        mbedtls
+        esp-tls
+        esp_timer
+        freertos
+        espressif__esp_codec_dev
+        lvgl__lvgl
+)
+
+# espressif/button + esp-sr declared in idf_component.yml; link when wake/AEC wired.

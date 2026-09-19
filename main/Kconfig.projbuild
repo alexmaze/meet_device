@@ -1,0 +1,22 @@
+menu "Meet Companion Device"
+
+config MEET_SERVER_URL
+    string "Meet server origin URL"
+    default "https://meet.refme.cc"
+    help
+        HTTPS origin of the private Meet backend (no trailing slash).
+
+config MEET_IDLE_HANGUP_MS
+    int "Idle hangup timeout (ms)"
+    default 90000
+    range 5000 600000
+    help
+        End Call and complete conversation after this idle period while InCall.
+
+config MEET_USE_DEVICE_AEC
+    bool "Enable device-side AEC hook points"
+    default y
+    help
+        Reserve AEC path in PCM pipeline (esp-sr AFE later). Boot/call works without it.
+
+endmenu

@@ -1,0 +1,14 @@
+## Meet companion device main component dependencies
+dependencies:
+  idf:
+    version: ">=5.5.2"
+  lvgl/lvgl:
+    version: "~9.5"
+  espressif/esp_codec_dev:
+    version: "*"
+  espressif/esp-sr:
+    version: "*"
+  espressif/button:
+    version: "*"
+  espressif/esp_websocket_client:
+    version: "*"
