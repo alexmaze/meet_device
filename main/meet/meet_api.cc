@@ -121,11 +121,21 @@ esp_err_t MeetApi::HttpJson(const char* method,
     return err;
 }
 
-esp_err_t MeetApi::CreatePairingSession(MeetPairingSession& out) {
+esp_err_t MeetApi::CreatePairingSession(MeetPairingSession& out, const std::string& display_name) {
     out = MeetPairingSession{};
+    cJSON* req = cJSON_CreateObject();
+    if (!display_name.empty()) {
+        cJSON_AddStringToObject(req, "displayName", display_name.c_str());
+    }
+    char* raw = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    if (!raw) {
+        return ESP_ERR_NO_MEM;
+    }
     std::string body;
     int status = 0;
-    esp_err_t err = HttpJson("POST", "/api/devices/pairing-sessions", "{}", body, &status);
+    esp_err_t err = HttpJson("POST", "/api/devices/pairing-sessions", raw, body, &status);
+    cJSON_free(raw);
     if (err != ESP_OK) {
         return err;
     }
@@ -135,8 +145,10 @@ esp_err_t MeetApi::CreatePairingSession(MeetPairingSession& out) {
     }
     const cJSON* id = cJSON_GetObjectItem(root, "pairingSessionId");
     const cJSON* code = cJSON_GetObjectItem(root, "code");
+    const cJSON* expires = cJSON_GetObjectItem(root, "expiresAt");
     if (cJSON_IsString(id)) out.id = id->valuestring;
     if (cJSON_IsString(code)) out.code = code->valuestring;
+    if (cJSON_IsString(expires)) out.expires_at = expires->valuestring;
     cJSON_Delete(root);
     return (out.id.empty() || out.code.empty()) ? ESP_ERR_INVALID_RESPONSE : ESP_OK;
 }
@@ -147,6 +159,10 @@ esp_err_t MeetApi::PollPairingSession(const std::string& session_id, MeetPairing
     int status = 0;
     const std::string path = "/api/devices/pairing-sessions/" + session_id;
     esp_err_t err = HttpJson("GET", path, nullptr, body, &status);
+    if (status == 404) {
+        out.expired = true;
+        return ESP_OK;
+    }
     if (err != ESP_OK) {
         return err;
     }

@@ -9,7 +9,10 @@ idf_component_register(
         "meet/meet_api.cc"
         "meet/meet_realtime.cc"
         "audio/pcm_pipeline.cc"
+        "audio/meet_es8388.cc"
         "audio/wake_word.cc"
+        "net/wifi_nvs.cc"
+        "net/wifi_service.cc"
     INCLUDE_DIRS
         "."
         "boards/zhengchen-minicam"
@@ -17,11 +20,13 @@ idf_component_register(
         "ui"
         "meet"
         "audio"
+        "net"
     REQUIRES
         nvs_flash
         esp_event
         esp_netif
         esp_wifi
+        esp_http_server
         esp_http_client
         esp_https_ota
         espressif__esp_websocket_client
@@ -31,6 +36,7 @@ idf_component_register(
         esp_driver_i2c
         esp_driver_spi
         esp_driver_ledc
+        esp_driver_i2s
         driver
         espressif__cjson
         mbedtls

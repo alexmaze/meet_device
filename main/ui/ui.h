@@ -6,13 +6,15 @@ namespace meet {
 
 esp_err_t UiInit();
 
-void UiShowPairing(const char* code);
-void UiShowReady(const char* character_name);  // nullptr → "未选择角色"
+void UiShowPairing(const char* code, const char* hint = nullptr);
+void UiShowReady(const char* character_name);
 void UiShowUnprovisioned();
+void UiShowWifiConfig(const char* ap_ssid, const char* url);
+void UiShowWifiConnecting(const char* ssid);
+void UiShowConnecting();
 void UiShowInCall(const char* subtitle);
 void UiShowSettings(const char* item_label);
 
-/** Call from a dedicated task or after board LCD init. */
 void UiTick(uint32_t elapsed_ms);
 
 }  // namespace meet

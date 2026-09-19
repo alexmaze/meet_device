@@ -5,8 +5,8 @@
 
 #include <esp_lcd_panel_ops.h>
 #include <esp_log.h>
-#include <esp_timer.h>
 #include <lvgl.h>
+#include <cstdio>
 #include <cstring>
 
 namespace meet {
@@ -18,6 +18,14 @@ lv_display_t* display_ = nullptr;
 lv_obj_t* screen_ = nullptr;
 lv_obj_t* title_label_ = nullptr;
 lv_obj_t* body_label_ = nullptr;
+
+const lv_font_t* UiFont() {
+#if LV_FONT_SOURCE_HAN_SANS_SC_16_CJK
+    return &lv_font_source_han_sans_sc_16_cjk;
+#else
+    return &lv_font_montserrat_20;
+#endif
+}
 
 void FlushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
     auto panel = Board::Instance().lcd_panel();
@@ -36,18 +44,21 @@ void EnsureWidgets() {
     lv_obj_set_style_bg_opa(screen_, LV_OPA_COVER, 0);
     lv_screen_load(screen_);
 
+    const lv_font_t* font = UiFont();
     title_label_ = lv_label_create(screen_);
     lv_obj_set_style_text_color(title_label_, lv_color_white(), 0);
-    lv_obj_set_style_text_font(title_label_, &lv_font_montserrat_28, 0);
-    lv_obj_align(title_label_, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_style_text_font(title_label_, font, 0);
+    lv_obj_set_width(title_label_, DISPLAY_WIDTH - 24);
+    lv_label_set_long_mode(title_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_align(title_label_, LV_ALIGN_TOP_MID, 0, 36);
     lv_label_set_text(title_label_, "");
 
     body_label_ = lv_label_create(screen_);
     lv_obj_set_style_text_color(body_label_, lv_color_hex(0xCCCCCC), 0);
-    lv_obj_set_style_text_font(body_label_, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(body_label_, font, 0);
     lv_obj_set_width(body_label_, DISPLAY_WIDTH - 24);
     lv_label_set_long_mode(body_label_, LV_LABEL_LONG_WRAP);
-    lv_obj_align(body_label_, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_align(body_label_, LV_ALIGN_CENTER, 0, 24);
     lv_label_set_text(body_label_, "");
 }
 
@@ -78,12 +89,12 @@ esp_err_t UiInit() {
     lv_display_set_flush_cb(display_, FlushCb);
 
     EnsureWidgets();
-    SetTexts("Meet", "启动中…");
+    SetTexts("Meet", "启动中");
     return ESP_OK;
 }
 
-void UiShowPairing(const char* code) {
-    SetTexts("配对码", code ? code : "------");
+void UiShowPairing(const char* code, const char* hint) {
+    SetTexts(code && code[0] ? code : "------", hint && hint[0] ? hint : "在网页输入配对码");
 }
 
 void UiShowReady(const char* character_name) {
@@ -93,7 +104,22 @@ void UiShowReady(const char* character_name) {
 }
 
 void UiShowUnprovisioned() {
-    SetTexts("未配置", "请配置 Wi-Fi 与 Meet 服务器");
+    SetTexts("未配网", "请配置家庭 Wi-Fi");
+}
+
+void UiShowWifiConfig(const char* ap_ssid, const char* url) {
+    char body[160];
+    snprintf(body, sizeof(body), "手机连接 %s\n浏览器打开 %s", ap_ssid ? ap_ssid : "Meet",
+             url ? url : "http://192.168.4.1");
+    SetTexts("配网", body);
+}
+
+void UiShowWifiConnecting(const char* ssid) {
+    SetTexts("连接 Wi-Fi", ssid ? ssid : "");
+}
+
+void UiShowConnecting() {
+    SetTexts("连接中", "正在接通角色");
 }
 
 void UiShowInCall(const char* subtitle) {

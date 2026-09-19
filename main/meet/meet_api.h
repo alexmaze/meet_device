@@ -9,10 +9,12 @@ namespace meet {
 struct MeetPairingSession {
     std::string id;
     std::string code;
+    std::string expires_at;
 };
 
 struct MeetPairingPollResult {
     bool claimed = false;
+    bool expired = false;
     std::string device_credential;
     std::string device_id;
 };
@@ -45,7 +47,7 @@ public:
 
     void Configure(const std::string& server_origin, const std::string& bearer_token);
 
-    esp_err_t CreatePairingSession(MeetPairingSession& out);
+    esp_err_t CreatePairingSession(MeetPairingSession& out, const std::string& display_name);
     esp_err_t PollPairingSession(const std::string& session_id, MeetPairingPollResult& out);
     esp_err_t ListCharacters(std::vector<MeetCharacter>& out);
     esp_err_t GetCharacterRuntime(const std::string& character_id, MeetCharacterRuntime& out);

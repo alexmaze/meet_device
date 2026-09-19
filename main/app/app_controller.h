@@ -19,8 +19,7 @@ public:
 
     void OnBootClick();
     void OnBootDoubleClick();
-
-    /** Tick from FreeRTOS task — pairing poll, idle hangup, etc. */
+    void OnBootLongPress();
     void Tick();
 
 private:
@@ -29,10 +28,14 @@ private:
     void EnterPairing();
     void EnterReady();
     void EnterUnprovisioned();
-    void EnterInCall();
+    void EnterConnecting();
+    void FinishConnectingToInCall();
+    void FailConnecting();
     void LeaveInCall();
     void EnterSettings();
     void HandleSettingsActivate();
+    void HandleWifiPhase();
+    void ApplyOnlineState();
 
     void StartIdleHangupTimer();
     void StopIdleHangupTimer();
@@ -41,13 +44,17 @@ private:
 
     AppStateMachine state_;
     std::string pairing_code_ = "------";
+    std::string pairing_hint_;
     std::string pairing_session_id_;
     std::string conversation_id_;
     std::string character_name_;
     int settings_index_ = 0;
-    bool wifi_ready_ = false;  // stub until WiFi provisioned
     int64_t last_activity_us_ = 0;
+    int64_t pairing_deadline_us_ = 0;
+    int64_t last_pair_poll_us_ = 0;
+    int64_t connecting_started_us_ = 0;
     bool idle_hangup_armed_ = false;
+    bool disconnect_seen_ = false;
 };
 
 }  // namespace meet

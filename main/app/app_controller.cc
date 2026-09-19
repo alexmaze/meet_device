@@ -7,6 +7,7 @@
 #include "pcm_pipeline.h"
 #include "ui.h"
 #include "wake_word.h"
+#include "wifi_service.h"
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -18,12 +19,16 @@ namespace meet {
 namespace {
 
 constexpr char TAG[] = "app_ctrl";
+constexpr int64_t kPairingTtlUs = 5LL * 60 * 1000000;
+constexpr int64_t kPairPollUs = 1500 * 1000;
+constexpr int64_t kConnectTimeoutUs = 12LL * 1000000;
+constexpr int64_t kRelayFallbackUs = 4LL * 1000000;
 
 const char* kSettingsItems[] = {
     "选择角色",
     "重新配对",
-    "Wi-Fi (stub)",
-    "横竖屏 (stub)",
+    "重新配网",
+    "横竖屏",
 };
 
 }  // namespace
@@ -37,13 +42,23 @@ esp_err_t AppController::Start() {
     state_.AddListener([this](AppState /*from*/, AppState to) {
         switch (to) {
             case AppState::Unprovisioned:
-                UiShowUnprovisioned();
+                if (WifiService::Instance().phase() == WifiPhase::ConfigAp) {
+                    UiShowWifiConfig(WifiService::Instance().ap_ssid().c_str(),
+                                     WifiService::Instance().ap_url().c_str());
+                } else if (WifiService::Instance().phase() == WifiPhase::ConnectingSta) {
+                    UiShowWifiConnecting(WifiService::Instance().sta_ssid().c_str());
+                } else {
+                    UiShowUnprovisioned();
+                }
                 break;
             case AppState::Pairing:
-                UiShowPairing(pairing_code_.c_str());
+                UiShowPairing(pairing_code_.c_str(), pairing_hint_.c_str());
                 break;
             case AppState::Ready:
                 UiShowReady(character_name_.empty() ? nullptr : character_name_.c_str());
+                break;
+            case AppState::Connecting:
+                UiShowConnecting();
                 break;
             case AppState::InCall:
                 UiShowInCall("通话中");
@@ -56,11 +71,12 @@ esp_err_t AppController::Start() {
 
     MeetRealtime::Instance().SetSpeechStartedHandler([this]() { NoteCallActivity(); });
     MeetRealtime::Instance().SetActivityHandler([this]() { NoteCallActivity(); });
+    MeetRealtime::Instance().SetDisconnectedHandler([this]() { disconnect_seen_ = true; });
 
     WakeWord::Instance().SetOnDetected([this]() {
         if (state_.Get() == AppState::Ready) {
-            ESP_LOGI(TAG, "WakeWord detected -> InCall");
-            EnterInCall();
+            ESP_LOGI(TAG, "WakeWord detected -> Connecting");
+            EnterConnecting();
         }
     });
 
@@ -68,38 +84,70 @@ esp_err_t AppController::Start() {
     if (MeetNvsLoad(cfg) != ESP_OK) {
         ESP_LOGW(TAG, "NVS load failed; using defaults");
     }
-
     if (cfg.server_origin.empty()) {
         cfg.server_origin = CONFIG_MEET_SERVER_URL;
         MeetNvsSave(cfg);
     }
-
     MeetApi::Instance().Configure(cfg.server_origin, cfg.device_credential);
+    character_name_ = cfg.selected_character_name;
 
-    if (!wifi_ready_ && cfg.device_credential.empty()) {
-        EnterUnprovisioned();
-        if (!cfg.server_origin.empty()) {
-            wifi_ready_ = true;
-            EnterPairing();
-        }
-    } else if (cfg.device_credential.empty()) {
+    Board::Instance().SetBootClickHandler([this]() { OnBootClick(); });
+    Board::Instance().SetBootDoubleClickHandler([this]() { OnBootDoubleClick(); });
+    Board::Instance().SetBootLongPressHandler([this]() { OnBootLongPress(); });
+
+    EnterUnprovisioned();
+    WifiService::Instance().Start();
+    HandleWifiPhase();
+    return ESP_OK;
+}
+
+void AppController::ApplyOnlineState() {
+    MeetConfig cfg;
+    MeetNvsLoad(cfg);
+    MeetApi::Instance().Configure(
+        cfg.server_origin.empty() ? CONFIG_MEET_SERVER_URL : cfg.server_origin,
+        cfg.device_credential);
+    if (cfg.device_credential.empty()) {
         EnterPairing();
     } else {
         character_name_ = cfg.selected_character_name;
         EnterReady();
     }
+}
 
-    Board::Instance().SetBootClickHandler([this]() { OnBootClick(); });
-    Board::Instance().SetBootDoubleClickHandler([this]() { OnBootDoubleClick(); });
-    return ESP_OK;
+void AppController::HandleWifiPhase() {
+    switch (WifiService::Instance().phase()) {
+        case WifiPhase::ConfigAp:
+            if (state_.Get() == AppState::InCall || state_.Get() == AppState::Connecting) {
+                LeaveInCall();
+            }
+            EnterUnprovisioned();
+            UiShowWifiConfig(WifiService::Instance().ap_ssid().c_str(),
+                             WifiService::Instance().ap_url().c_str());
+            break;
+        case WifiPhase::ConnectingSta:
+            EnterUnprovisioned();
+            UiShowWifiConnecting(WifiService::Instance().sta_ssid().c_str());
+            break;
+        case WifiPhase::Connected:
+            ApplyOnlineState();
+            break;
+        case WifiPhase::Failed:
+            EnterUnprovisioned();
+            UiShowUnprovisioned();
+            break;
+        case WifiPhase::Idle:
+            break;
+    }
 }
 
 void AppController::OnBootClick() {
     NoteCallActivity();
     switch (state_.Get()) {
         case AppState::Ready:
-            EnterInCall();
+            EnterConnecting();
             break;
+        case AppState::Connecting:
         case AppState::InCall:
             LeaveInCall();
             break;
@@ -118,12 +166,22 @@ void AppController::OnBootDoubleClick() {
         constexpr int kCount = static_cast<int>(sizeof(kSettingsItems) / sizeof(kSettingsItems[0]));
         settings_index_ = (settings_index_ + 1) % kCount;
         UiShowSettings(kSettingsItems[settings_index_]);
-    } else if (state_.Get() == AppState::Ready || state_.Get() == AppState::InCall) {
-        if (state_.Get() == AppState::InCall) {
+    } else if (state_.Get() == AppState::Ready || state_.Get() == AppState::InCall ||
+               state_.Get() == AppState::Connecting) {
+        if (state_.Get() == AppState::InCall || state_.Get() == AppState::Connecting) {
             LeaveInCall();
         }
         EnterSettings();
     }
+}
+
+void AppController::OnBootLongPress() {
+    ESP_LOGI(TAG, "long press → SoftAP");
+    if (state_.Get() == AppState::InCall || state_.Get() == AppState::Connecting) {
+        LeaveInCall();
+    }
+    WifiService::Instance().EnterConfigMode();
+    HandleWifiPhase();
 }
 
 void AppController::EnterUnprovisioned() {
@@ -132,19 +190,26 @@ void AppController::EnterUnprovisioned() {
 
 void AppController::EnterPairing() {
     pairing_code_ = "------";
+    pairing_hint_ = "正在申请配对码";
     pairing_session_id_.clear();
+    pairing_deadline_us_ = 0;
+    last_pair_poll_us_ = 0;
     state_.Set(AppState::Pairing);
 
     MeetPairingSession session;
-    esp_err_t err = MeetApi::Instance().CreatePairingSession(session);
+    esp_err_t err =
+        MeetApi::Instance().CreatePairingSession(session, WifiService::Instance().display_name());
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "CreatePairingSession failed (%s); placeholder code", esp_err_to_name(err));
-        UiShowPairing(pairing_code_.c_str());
+        pairing_hint_ = "申请失败，稍后重试";
+        UiShowPairing(pairing_code_.c_str(), pairing_hint_.c_str());
+        pairing_deadline_us_ = esp_timer_get_time() + 8 * 1000000LL;
         return;
     }
     pairing_code_ = session.code.empty() ? "------" : session.code;
     pairing_session_id_ = session.id;
-    UiShowPairing(pairing_code_.c_str());
+    pairing_hint_ = "在网页输入配对码";
+    pairing_deadline_us_ = esp_timer_get_time() + kPairingTtlUs;
+    UiShowPairing(pairing_code_.c_str(), pairing_hint_.c_str());
 }
 
 void AppController::EnterReady() {
@@ -175,7 +240,7 @@ void AppController::EnterSettings() {
 
 void AppController::HandleSettingsActivate() {
     switch (settings_index_) {
-        case 0: {  // select character
+        case 0: {
             std::vector<MeetCharacter> chars;
             if (MeetApi::Instance().ListCharacters(chars) == ESP_OK && !chars.empty()) {
                 MeetConfig cfg;
@@ -192,27 +257,27 @@ void AppController::HandleSettingsActivate() {
                 cfg.selected_character_name = chars[idx].name;
                 MeetNvsSave(cfg);
                 character_name_ = chars[idx].name;
-                ESP_LOGI(TAG, "Selected character: %s", character_name_.c_str());
-            } else {
-                ESP_LOGW(TAG, "ListCharacters unavailable");
             }
             EnterReady();
             break;
         }
-        case 1:  // re-pair
-            {
-                MeetConfig cfg;
-                MeetNvsLoad(cfg);
-                cfg.device_credential.clear();
-                cfg.device_id.clear();
-                MeetNvsSave(cfg);
-                MeetApi::Instance().Configure(cfg.server_origin, "");
+        case 1: {
+            MeetConfig cfg;
+            MeetNvsLoad(cfg);
+            cfg.device_credential.clear();
+            cfg.device_id.clear();
+            MeetNvsSave(cfg);
+            MeetApi::Instance().Configure(cfg.server_origin, "");
+            if (WifiService::Instance().phase() == WifiPhase::Connected) {
                 EnterPairing();
+            } else {
+                EnterUnprovisioned();
             }
             break;
+        }
         case 2:
-            ESP_LOGW(TAG, "Wi-Fi settings stub");
-            EnterReady();
+            WifiService::Instance().EnterConfigMode();
+            HandleWifiPhase();
             break;
         case 3:
             ESP_LOGW(TAG, "Orientation toggle stub");
@@ -224,7 +289,7 @@ void AppController::HandleSettingsActivate() {
     }
 }
 
-void AppController::EnterInCall() {
+void AppController::EnterConnecting() {
     MeetConfig cfg;
     MeetNvsLoad(cfg);
     if (cfg.selected_character_id.empty()) {
@@ -257,6 +322,7 @@ void AppController::EnterInCall() {
     session_cfg.voice = runtime.voice;
     session_cfg.instructions = runtime.instructions;
     session_cfg.max_history_turns = runtime.max_history_turns;
+    disconnect_seen_ = false;
     err = MeetRealtime::Instance().Open(cfg.selected_character_id, conversation_id_, session_cfg);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Realtime open failed: %s", esp_err_to_name(err));
@@ -265,10 +331,26 @@ void AppController::EnterInCall() {
         return;
     }
 
+    connecting_started_us_ = esp_timer_get_time();
+    state_.Set(AppState::Connecting);
+}
+
+void AppController::FinishConnectingToInCall() {
     PcmPipeline::Instance().StartCapture();
     NoteCallActivity();
     idle_hangup_armed_ = true;
     state_.Set(AppState::InCall);
+}
+
+void AppController::FailConnecting() {
+    ESP_LOGW(TAG, "Connecting failed / timeout");
+    PcmPipeline::Instance().StopCapture();
+    MeetRealtime::Instance().Close();
+    if (!conversation_id_.empty()) {
+        MeetApi::Instance().CompleteConversation(conversation_id_, 0);
+        conversation_id_.clear();
+    }
+    EnterReady();
 }
 
 void AppController::LeaveInCall() {
@@ -301,19 +383,61 @@ void AppController::OnIdleHangup() {
 }
 
 void AppController::Tick() {
-    if (state_.Get() == AppState::Pairing && !pairing_session_id_.empty()) {
-        MeetPairingPollResult result;
-        if (MeetApi::Instance().PollPairingSession(pairing_session_id_, result) == ESP_OK &&
-            result.claimed) {
-            MeetConfig cfg;
-            MeetNvsLoad(cfg);
-            cfg.device_credential = result.device_credential;
-            cfg.device_id = result.device_id;
-            MeetNvsSave(cfg);
-            MeetApi::Instance().Configure(cfg.server_origin, cfg.device_credential);
-            ESP_LOGI(TAG, "DeviceBinding complete");
-            EnterReady();
+    if (WifiService::Instance().ConsumePhaseChange()) {
+        HandleWifiPhase();
+    }
+
+    if (state_.Get() == AppState::Pairing) {
+        const int64_t now = esp_timer_get_time();
+        if (pairing_deadline_us_ > 0 && now >= pairing_deadline_us_) {
+            ESP_LOGW(TAG, "pairing expired or retry");
+            EnterPairing();
+            return;
         }
+        if (!pairing_session_id_.empty() && now - last_pair_poll_us_ >= kPairPollUs) {
+            last_pair_poll_us_ = now;
+            MeetPairingPollResult result;
+            if (MeetApi::Instance().PollPairingSession(pairing_session_id_, result) == ESP_OK) {
+                if (result.expired) {
+                    pairing_hint_ = "配对码过期，正在重申";
+                    UiShowPairing(pairing_code_.c_str(), pairing_hint_.c_str());
+                    EnterPairing();
+                    return;
+                }
+                if (result.claimed) {
+                    MeetConfig cfg;
+                    MeetNvsLoad(cfg);
+                    cfg.device_credential = result.device_credential;
+                    cfg.device_id = result.device_id;
+                    MeetNvsSave(cfg);
+                    MeetApi::Instance().Configure(cfg.server_origin, cfg.device_credential);
+                    ESP_LOGI(TAG, "DeviceBinding complete");
+                    EnterReady();
+                }
+            }
+        }
+    }
+
+    if (state_.Get() == AppState::Connecting) {
+        if (disconnect_seen_) {
+            disconnect_seen_ = false;
+            FailConnecting();
+            return;
+        }
+        const int64_t elapsed = esp_timer_get_time() - connecting_started_us_;
+        if (MeetRealtime::Instance().IsReady()) {
+            FinishConnectingToInCall();
+        } else if (elapsed >= kConnectTimeoutUs) {
+            FailConnecting();
+        } else if (elapsed >= kRelayFallbackUs) {
+            MeetRealtime::Instance().AssumeRelayReady();
+        }
+    }
+
+    if (disconnect_seen_ && state_.Get() == AppState::InCall) {
+        disconnect_seen_ = false;
+        LeaveInCall();
+        return;
     }
 
     if (idle_hangup_armed_ && state_.Get() == AppState::InCall) {
@@ -323,7 +447,6 @@ void AppController::Tick() {
         }
     }
 
-    // Continuous uplink while InCall; silence frames do not reset IdleHangup.
     if (state_.Get() == AppState::InCall) {
         PcmFrame frame;
         if (PcmPipeline::Instance().PopCaptureFrame(frame)) {

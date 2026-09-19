@@ -19,6 +19,7 @@ using MeetRealtimeAudioDeltaCb =
     std::function<void(const std::string& response_id, const uint8_t* pcm, size_t bytes)>;
 using MeetRealtimeSpeechStartedCb = std::function<void()>;
 using MeetRealtimeActivityCb = std::function<void()>;
+using MeetRealtimeDisconnectedCb = std::function<void()>;
 
 /**
  * Meet duplex realtime WebSocket client.
@@ -31,12 +32,15 @@ public:
     void SetAudioDeltaHandler(MeetRealtimeAudioDeltaCb cb);
     void SetSpeechStartedHandler(MeetRealtimeSpeechStartedCb cb);
     void SetActivityHandler(MeetRealtimeActivityCb cb);
+    void SetDisconnectedHandler(MeetRealtimeDisconnectedCb cb);
 
     esp_err_t Open(const std::string& character_id,
                    const std::string& conversation_id,
                    const MeetRealtimeSessionConfig& session);
     void Close();
     bool IsReady() const { return ready_; }
+    bool IsConnected() const { return connected_; }
+    void AssumeRelayReady();
 
     /** Send session.update after relay.ready (or immediately if no relay gate). */
     esp_err_t SendSessionUpdate();
@@ -66,6 +70,7 @@ private:
     MeetRealtimeAudioDeltaCb on_audio_delta_;
     MeetRealtimeSpeechStartedCb on_speech_started_;
     MeetRealtimeActivityCb on_activity_;
+    MeetRealtimeDisconnectedCb on_disconnected_;
 };
 
 }  // namespace meet

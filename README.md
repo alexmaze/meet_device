@@ -40,8 +40,8 @@ idf.py build
 
 ## 当前实现状态
 
-- 已实现：状态机、配对/角色 HTTP、Realtime WS 客户端、generation 清空播放队列、Boot / IdleHangup / 儿童 prepare
-- Stub：Wi-Fi SoftAP 配网、ES8388 真采集（现为静音帧上行）、esp-sr AFE 唤醒词与 AEC、完整 LVGL 横竖屏菜单
+- P0 已落地：SoftAP 配网 + STA、ES8388 采集/播放、配对过期重试、Connecting / 断线回 Ready、SourceHan 中文
+- 仍为 stub / P1：esp-sr 唤醒词与 AEC、音量/电量 ADC、完整横竖屏菜单
 
 ## 领域词与方案
 

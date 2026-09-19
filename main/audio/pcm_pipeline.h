@@ -27,7 +27,7 @@ class PcmPipeline {
 public:
     static PcmPipeline& Instance();
 
-    esp_err_t Init();  // ES8388 via esp_codec_dev when ready; silence stub OK
+    esp_err_t Init();
 
     void StartCapture();
     void StopCapture();
@@ -49,8 +49,11 @@ private:
     PcmPipeline() = default;
 
     static void CaptureTask(void* arg);
+    static void PlaybackTask(void* arg);
 
+    bool codec_ready_ = false;
     bool capture_running_ = false;
+    bool playback_running_ = false;
     bool aec_enabled_ = false;
     uint32_t generation_ = 1;
     std::mutex mu_;

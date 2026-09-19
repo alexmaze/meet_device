@@ -6,10 +6,11 @@
 namespace meet {
 
 enum class AppState {
-    Unprovisioned,  // WiFi / server URL
-    Pairing,        // show PairingCode
-    Ready,          // SelectedCharacter, wait Boot/wake
-    InCall,         // duplex call
+    Unprovisioned,  // WifiProvisioning
+    Pairing,
+    Ready,
+    Connecting,
+    InCall,
     Settings,
 };
 

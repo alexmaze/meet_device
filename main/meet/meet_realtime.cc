@@ -73,6 +73,10 @@ void MeetRealtime::SetActivityHandler(MeetRealtimeActivityCb cb) {
     on_activity_ = std::move(cb);
 }
 
+void MeetRealtime::SetDisconnectedHandler(MeetRealtimeDisconnectedCb cb) {
+    on_disconnected_ = std::move(cb);
+}
+
 esp_err_t MeetRealtime::Open(const std::string& character_id,
                              const std::string& conversation_id,
                              const MeetRealtimeSessionConfig& session) {
@@ -133,6 +137,13 @@ esp_err_t MeetRealtime::Open(const std::string& character_id,
     return ESP_OK;
 }
 
+void MeetRealtime::AssumeRelayReady() {
+    if (connected_ && !session_sent_) {
+        relay_ready_ = true;
+        SendSessionUpdate();
+    }
+}
+
 void MeetRealtime::Close() {
     ready_ = false;
     connected_ = false;
@@ -154,11 +165,8 @@ void MeetRealtime::WebsocketEventHandler(void* handler_args,
     auto* data = static_cast<esp_websocket_event_data_t*>(event_data);
     switch (event_id) {
         case WEBSOCKET_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "connected");
+            ESP_LOGI(TAG, "connected; wait relay.ready");
             self->connected_ = true;
-            // If backend has no relay.ready gate, treat connect as ready-to-configure.
-            self->relay_ready_ = true;
-            self->SendSessionUpdate();
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "disconnected");
@@ -166,6 +174,9 @@ void MeetRealtime::WebsocketEventHandler(void* handler_args,
             self->ready_ = false;
             self->relay_ready_ = false;
             self->session_sent_ = false;
+            if (self->on_disconnected_) {
+                self->on_disconnected_();
+            }
             break;
         case WEBSOCKET_EVENT_DATA:
             if (data && data->op_code == 0x1 && data->data_ptr && data->data_len > 0) {

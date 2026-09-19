@@ -16,6 +16,7 @@ constexpr int kBacklightLedcChannel = LEDC_CHANNEL_0;
 constexpr int kBacklightLedcTimer = LEDC_TIMER_0;
 constexpr int kDebounceMs = 40;
 constexpr int kDoubleClickMs = 400;
+constexpr int kLongPressMs = 3000;
 
 }  // namespace
 
@@ -139,13 +140,35 @@ void Board::BootButtonTask(void* arg) {
     auto* self = static_cast<Board*>(arg);
     int last = 1;
     int clicks = 0;
+    bool holding = false;
+    bool long_fired = false;
+    TickType_t down_tick = 0;
     TickType_t last_down = 0;
 
     while (true) {
         const int level = gpio_get_level(BOOT_BUTTON_GPIO);
-        if (last == 1 && level == 0) {
-            vTaskDelay(pdMS_TO_TICKS(kDebounceMs));
-            if (gpio_get_level(BOOT_BUTTON_GPIO) == 0) {
+        if (level == 0) {
+            if (!holding) {
+                vTaskDelay(pdMS_TO_TICKS(kDebounceMs));
+                if (gpio_get_level(BOOT_BUTTON_GPIO) != 0) {
+                    last = 1;
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                    continue;
+                }
+                holding = true;
+                long_fired = false;
+                down_tick = xTaskGetTickCount();
+            } else if (!long_fired &&
+                       (xTaskGetTickCount() - down_tick) > pdMS_TO_TICKS(kLongPressMs)) {
+                long_fired = true;
+                clicks = 0;
+                if (self->on_boot_long_press_) {
+                    self->on_boot_long_press_();
+                }
+            }
+        } else if (holding) {
+            holding = false;
+            if (!long_fired) {
                 const TickType_t now = xTaskGetTickCount();
                 if (clicks > 0 && (now - last_down) < pdMS_TO_TICKS(kDoubleClickMs)) {
                     clicks = 0;
@@ -174,6 +197,10 @@ void Board::SetBootClickHandler(BootClickCallback cb) {
 
 void Board::SetBootDoubleClickHandler(BootDoubleClickCallback cb) {
     on_boot_double_click_ = std::move(cb);
+}
+
+void Board::SetBootLongPressHandler(BootLongPressCallback cb) {
+    on_boot_long_press_ = std::move(cb);
 }
 
 esp_err_t Board::InitAdcStubs() {

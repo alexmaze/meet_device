@@ -14,6 +14,7 @@ namespace meet {
 
 using BootClickCallback = std::function<void()>;
 using BootDoubleClickCallback = std::function<void()>;
+using BootLongPressCallback = std::function<void()>;
 
 /**
  * Simplified zhengchen-minicam board bring-up.
@@ -34,6 +35,7 @@ public:
     void SetBacklightPercent(int percent);
     void SetBootClickHandler(BootClickCallback cb);
     void SetBootDoubleClickHandler(BootDoubleClickCallback cb);
+    void SetBootLongPressHandler(BootLongPressCallback cb);
 
     /** Battery / volume stubs — filled by ADC tasks when ready. */
     int battery_percent() const { return battery_percent_; }
@@ -57,6 +59,7 @@ private:
 
     BootClickCallback on_boot_click_;
     BootDoubleClickCallback on_boot_double_click_;
+    BootLongPressCallback on_boot_long_press_;
 
     int battery_percent_ = 100;
     bool is_charging_ = false;

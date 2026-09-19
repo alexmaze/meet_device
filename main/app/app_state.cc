@@ -12,6 +12,7 @@ const char* AppStateName(AppState state) {
         case AppState::Unprovisioned: return "Unprovisioned";
         case AppState::Pairing: return "Pairing";
         case AppState::Ready: return "Ready";
+        case AppState::Connecting: return "Connecting";
         case AppState::InCall: return "InCall";
         case AppState::Settings: return "Settings";
     }
