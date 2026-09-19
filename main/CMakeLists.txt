@@ -11,6 +11,8 @@ idf_component_register(
         "audio/pcm_pipeline.cc"
         "audio/meet_es8388.cc"
         "audio/wake_word.cc"
+        "audio/afe_processor.cc"
+        "audio/sr_models.cc"
         "net/wifi_nvs.cc"
         "net/wifi_service.cc"
     INCLUDE_DIRS
@@ -44,7 +46,6 @@ idf_component_register(
         esp_timer
         freertos
         espressif__esp_codec_dev
+        espressif__esp-sr
         lvgl__lvgl
 )
-
-# espressif/button + esp-sr declared in idf_component.yml; link when wake/AEC wired.

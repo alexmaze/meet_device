@@ -18,6 +18,7 @@ public:
     void EnableInput(bool enable);
     void EnableOutput(bool enable);
     void SetOutputVolume(int volume);
+    int output_volume() const { return volume_; }
 
     int input_channels() const { return input_channels_; }
     int input_rate() const { return input_rate_; }

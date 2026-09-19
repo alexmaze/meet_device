@@ -1,38 +1,36 @@
 #pragma once
 
 #include <cstdint>
+#include <esp_err.h>
 #include <functional>
 #include <mutex>
 #include <vector>
-#include <esp_err.h>
 
 namespace meet {
 
-using WakeWordDetectedCb = std::function<void()>;
-
-class WakeWord {
+class AfeProcessor {
 public:
-    static WakeWord& Instance();
+    static AfeProcessor& Instance();
 
     esp_err_t Init(int channels, bool input_reference);
-    esp_err_t Start();
+    void Start();
     void Stop();
-    bool ready() const { return ready_; }
     bool running() const;
+    bool ready() const { return ready_; }
 
     void FeedInterleaved16k(const int16_t* data, size_t samples);
-    void SetOnDetected(WakeWordDetectedCb cb);
+    void SetOutputHandler(std::function<void(const int16_t* data, size_t samples)> cb);
 
 private:
-    WakeWord() = default;
-    static void DetectionTask(void* arg);
+    AfeProcessor() = default;
+    static void Task(void* arg);
 
     bool ready_ = false;
     int channels_ = 2;
     void* event_group_ = nullptr;
     const void* afe_iface_ = nullptr;
     void* afe_data_ = nullptr;
-    WakeWordDetectedCb on_detected_;
+    std::function<void(const int16_t*, size_t)> on_output_;
     std::mutex feed_mu_;
     std::vector<int16_t> feed_buf_;
 };

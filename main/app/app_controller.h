@@ -20,6 +20,7 @@ public:
     void OnBootClick();
     void OnBootDoubleClick();
     void OnBootLongPress();
+    void OnVolumeKey(int delta);
     void Tick();
 
 private:
@@ -36,6 +37,10 @@ private:
     void HandleSettingsActivate();
     void HandleWifiPhase();
     void ApplyOnlineState();
+    void HandleUnauthorized();
+    void RefreshSettingsUi();
+    void ApplyVolume(int volume, bool persist);
+    void ApplyOrientation(bool landscape, bool persist);
 
     void StartIdleHangupTimer();
     void StopIdleHangupTimer();
@@ -49,6 +54,8 @@ private:
     std::string conversation_id_;
     std::string character_name_;
     int settings_index_ = 0;
+    int volume_ = 70;
+    bool landscape_ = false;
     int64_t last_activity_us_ = 0;
     int64_t pairing_deadline_us_ = 0;
     int64_t last_pair_poll_us_ = 0;

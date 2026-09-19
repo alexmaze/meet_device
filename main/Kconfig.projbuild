@@ -14,9 +14,9 @@ config MEET_IDLE_HANGUP_MS
         End Call and complete conversation after this idle period while InCall.
 
 config MEET_USE_DEVICE_AEC
-    bool "Enable device-side AEC hook points"
+    bool "Enable device-side AEC"
     default y
     help
-        Reserve AEC path in PCM pipeline (esp-sr AFE later). Boot/call works without it.
+        Run AFE_TYPE_VC with the ES8388 reference channel during InCall.
 
 endmenu

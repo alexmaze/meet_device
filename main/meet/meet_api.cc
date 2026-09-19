@@ -111,6 +111,10 @@ esp_err_t MeetApi::HttpJson(const char* method,
         response_body.assign(buf.data.begin(), buf.data.end());
         ESP_LOGD(TAG, "%s %s -> %d (%u bytes)", method, path.c_str(), status,
                  static_cast<unsigned>(response_body.size()));
+        if (status == 401 && !bearer_.empty()) {
+            unauthorized_ = true;
+            ESP_LOGW(TAG, "%s %s -> 401, credential invalid", method, path.c_str());
+        }
         if (status < 200 || status >= 300) {
             err = ESP_FAIL;
         }
@@ -317,6 +321,12 @@ esp_err_t MeetApi::CompleteConversation(const std::string& conversation_id, int 
     std::string body;
     int status = 0;
     return HttpJson("POST", path, payload, body, &status);
+}
+
+bool MeetApi::ConsumeUnauthorized() {
+    const bool value = unauthorized_;
+    unauthorized_ = false;
+    return value;
 }
 
 esp_err_t MeetApi::GetAuthMe(MeetAuthMe& out) {

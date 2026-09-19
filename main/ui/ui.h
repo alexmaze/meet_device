@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <esp_err.h>
 
 namespace meet {
@@ -13,7 +14,9 @@ void UiShowWifiConfig(const char* ap_ssid, const char* url);
 void UiShowWifiConnecting(const char* ssid);
 void UiShowConnecting();
 void UiShowInCall(const char* subtitle);
-void UiShowSettings(const char* item_label);
+void UiShowSettings(const char* const* items, int count, int index);
+void UiShowToast(const char* text);
+void UiApplyOrientation(bool landscape);
 
 void UiTick(uint32_t elapsed_ms);
 

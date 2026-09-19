@@ -12,6 +12,8 @@ struct MeetNvsKeys {
     static constexpr const char* kDeviceId = "dev_id";
     static constexpr const char* kCharacterId = "char_id";
     static constexpr const char* kCharacterName = "char_name";
+    static constexpr const char* kLandscape = "landscape";
+    static constexpr const char* kVolume = "volume";
 };
 
 struct MeetConfig {
@@ -20,6 +22,8 @@ struct MeetConfig {
     std::string device_id;
     std::string selected_character_id;
     std::string selected_character_name;
+    bool landscape = false;
+    int volume = 70;
 };
 
 }  // namespace meet

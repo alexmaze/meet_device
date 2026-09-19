@@ -1,8 +1,10 @@
 #include "pcm_pipeline.h"
 
+#include "afe_processor.h"
 #include "board.h"
 #include "config.h"
 #include "meet_es8388.h"
+#include "wake_word.h"
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -38,34 +40,121 @@ esp_err_t PcmPipeline::Init() {
     } else {
         ESP_LOGI(TAG, "ES8388 capture/playback ready");
     }
+
+    const int channels = codec_ready_ ? Es8388Codec::Instance().input_channels() : 2;
+    const bool has_ref = AUDIO_INPUT_REFERENCE;
+    if (AfeProcessor::Instance().Init(channels, has_ref) == ESP_OK) {
+        AfeProcessor::Instance().SetOutputHandler(
+            [this](const int16_t* data, size_t samples) { OnAfeOutput(data, samples); });
+    } else {
+        ESP_LOGW(TAG, "AFE VC unavailable; InCall uses mic channel 0");
+    }
+    if (WakeWord::Instance().Init(channels, has_ref) != ESP_OK) {
+        ESP_LOGW(TAG, "wake AFE unavailable; Boot remains the call trigger");
+    }
     return ESP_OK;
 }
 
-void PcmPipeline::StartCapture() {
+void PcmPipeline::StopTasks() {
+    capture_running_ = false;
+    playback_running_ = false;
+    WakeWord::Instance().Stop();
+    AfeProcessor::Instance().Stop();
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        capture_q_.clear();
+        playback_q_.clear();
+        afe_acc_.clear();
+    }
+    if (codec_ready_) {
+        Es8388Codec::Instance().EnableInput(false);
+        Es8388Codec::Instance().EnableOutput(false);
+    }
+    vTaskDelay(pdMS_TO_TICKS(40));
+    mode_ = PcmMode::Idle;
+}
+
+void PcmPipeline::EnsureCaptureTask() {
     if (capture_running_) {
         return;
     }
     capture_running_ = true;
+    xTaskCreate(CaptureTask, "pcm_cap", 4096, this, 6, nullptr);
+}
+
+void PcmPipeline::StartListen() {
+    if (mode_ == PcmMode::Listen) {
+        if (WakeWord::Instance().ready() && !WakeWord::Instance().running()) {
+            WakeWord::Instance().Start();
+        }
+        return;
+    }
+    StopTasks();
+    mode_ = PcmMode::Listen;
+    if (codec_ready_) {
+        Es8388Codec::Instance().EnableInput(true);
+    }
+    if (WakeWord::Instance().ready()) {
+        WakeWord::Instance().Start();
+    }
+    EnsureCaptureTask();
+    ESP_LOGI(TAG, "listen (wake) started");
+}
+
+void PcmPipeline::StartCapture() {
+    if (mode_ == PcmMode::Call) {
+        return;
+    }
+    StopTasks();
+    mode_ = PcmMode::Call;
     if (codec_ready_) {
         Es8388Codec::Instance().EnableInput(true);
         Es8388Codec::Instance().EnableOutput(true);
         playback_running_ = true;
         xTaskCreate(PlaybackTask, "pcm_play", 4096, this, 6, nullptr);
     }
-    xTaskCreate(CaptureTask, "pcm_cap", 4096, this, 6, nullptr);
+    if (aec_enabled_ && AfeProcessor::Instance().ready()) {
+        AfeProcessor::Instance().Start();
+    }
+    EnsureCaptureTask();
+    ESP_LOGI(TAG, "call capture started aec=%d",
+             (aec_enabled_ && AfeProcessor::Instance().ready()) ? 1 : 0);
 }
 
 void PcmPipeline::StopCapture() {
-    capture_running_ = false;
-    playback_running_ = false;
-    {
-        std::lock_guard<std::mutex> lock(mu_);
-        capture_q_.clear();
-        playback_q_.clear();
+    StopTasks();
+}
+
+void PcmPipeline::PushUplink(const int16_t* data, size_t samples) {
+    if (!data || samples == 0) {
+        return;
     }
-    if (codec_ready_) {
-        Es8388Codec::Instance().EnableInput(false);
-        Es8388Codec::Instance().EnableOutput(false);
+    PcmFrame frame;
+    frame.samples.assign(data, data + samples);
+    if (frame.samples.size() != static_cast<size_t>(kPcmFrameSamples)) {
+        frame.samples.resize(kPcmFrameSamples, 0);
+    }
+    std::lock_guard<std::mutex> lock(mu_);
+    if (capture_q_.size() > 10) {
+        capture_q_.pop_front();
+    }
+    capture_q_.push_back(std::move(frame));
+}
+
+void PcmPipeline::OnAfeOutput(const int16_t* data, size_t samples) {
+    if (!data || samples == 0 || mode_ != PcmMode::Call) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mu_);
+    afe_acc_.insert(afe_acc_.end(), data, data + samples);
+    while (afe_acc_.size() >= static_cast<size_t>(kPcmFrameSamples)) {
+        PcmFrame frame;
+        frame.samples.assign(afe_acc_.begin(), afe_acc_.begin() + kPcmFrameSamples);
+        afe_acc_.erase(afe_acc_.begin(), afe_acc_.begin() + kPcmFrameSamples);
+        if (capture_q_.size() > 10) {
+            capture_q_.pop_front();
+        }
+        capture_q_.push_back(std::move(frame));
     }
 }
 
@@ -75,39 +164,44 @@ void PcmPipeline::CaptureTask(void* arg) {
     std::vector<int16_t> raw;
     uint32_t phase = 0;
     while (self->capture_running_) {
-        PcmFrame frame;
         if (self->codec_ready_) {
             const int channels = codec.input_channels();
             raw.resize(static_cast<size_t>(kCodecFrameSamples * channels));
             codec.Read(raw.data(), static_cast<int>(raw.size()));
-            std::vector<int16_t> mono(kCodecFrameSamples);
-            for (int i = 0; i < kCodecFrameSamples; ++i) {
-                mono[i] = raw[static_cast<size_t>(i * channels)];
-            }
-            frame.samples = Resample24kTo16k(mono.data(), mono.size());
-            if (frame.samples.size() != static_cast<size_t>(kPcmFrameSamples) && !mono.empty()) {
-                frame.samples.resize(kPcmFrameSamples, 0);
-                const size_t n = std::min(mono.size(), frame.samples.size());
-                for (size_t i = 0; i < n; ++i) {
-                    const size_t src = (i * mono.size()) / n;
-                    frame.samples[i] = mono[src];
+            const auto interleaved16k =
+                Resample24kTo16kInterleaved(raw.data(), raw.size(), channels);
+
+            if (self->mode_ == PcmMode::Listen) {
+                WakeWord::Instance().FeedInterleaved16k(interleaved16k.data(), interleaved16k.size());
+            } else if (self->mode_ == PcmMode::Call) {
+                if (self->aec_enabled_ && AfeProcessor::Instance().ready() &&
+                    AfeProcessor::Instance().running()) {
+                    AfeProcessor::Instance().FeedInterleaved16k(interleaved16k.data(),
+                                                                interleaved16k.size());
+                } else {
+                    const size_t frames = interleaved16k.size() / static_cast<size_t>(channels);
+                    std::vector<int16_t> mono(frames);
+                    for (size_t i = 0; i < frames; ++i) {
+                        mono[i] = interleaved16k[i * static_cast<size_t>(channels)];
+                    }
+                    if (mono.size() != static_cast<size_t>(kPcmFrameSamples)) {
+                        mono.resize(kPcmFrameSamples, 0);
+                    }
+                    self->PushUplink(mono.data(), mono.size());
                 }
             }
-        } else {
+        } else if (self->mode_ == PcmMode::Call) {
+            PcmFrame frame;
             frame.samples.resize(kPcmFrameSamples);
             for (int i = 0; i < kPcmFrameSamples; ++i) {
                 frame.samples[i] = static_cast<int16_t>(80 * sinf(phase * 0.02f));
                 ++phase;
             }
+            self->PushUplink(frame.samples.data(), frame.samples.size());
+            vTaskDelay(pdMS_TO_TICKS(kPcmFrameMs));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(kPcmFrameMs));
         }
-        {
-            std::lock_guard<std::mutex> lock(self->mu_);
-            if (self->capture_q_.size() > 10) {
-                self->capture_q_.pop_front();
-            }
-            self->capture_q_.push_back(std::move(frame));
-        }
-        vTaskDelay(pdMS_TO_TICKS(kPcmFrameMs));
     }
     vTaskDelete(nullptr);
 }
@@ -203,6 +297,44 @@ std::vector<int16_t> PcmPipeline::Resample16kTo24k(const int16_t* in, size_t in_
     if (in_count % 2) {
         out.push_back(in[in_count - 1]);
     }
+    return out;
+}
+
+std::vector<int16_t> PcmPipeline::Resample24kTo16kInterleaved(const int16_t* in,
+                                                             size_t in_count,
+                                                             int channels) {
+    if (!in || in_count == 0 || channels <= 0) {
+        return {};
+    }
+    if (channels == 1) {
+        return Resample24kTo16k(in, in_count);
+    }
+    const size_t frames = in_count / static_cast<size_t>(channels);
+    std::vector<int16_t> out;
+    const size_t out_frames = (frames * 2) / 3;
+    out.resize(out_frames * static_cast<size_t>(channels), 0);
+    size_t o = 0;
+    for (size_t i = 0; i + 2 < frames; i += 3) {
+        for (int ch = 0; ch < channels; ++ch) {
+            out[o * static_cast<size_t>(channels) + static_cast<size_t>(ch)] =
+                in[i * static_cast<size_t>(channels) + static_cast<size_t>(ch)];
+        }
+        ++o;
+        if (o >= out_frames) {
+            break;
+        }
+        for (int ch = 0; ch < channels; ++ch) {
+            const int32_t a = in[(i + 1) * static_cast<size_t>(channels) + static_cast<size_t>(ch)];
+            const int32_t b = in[(i + 2) * static_cast<size_t>(channels) + static_cast<size_t>(ch)];
+            out[o * static_cast<size_t>(channels) + static_cast<size_t>(ch)] =
+                static_cast<int16_t>((a + b) / 2);
+        }
+        ++o;
+        if (o >= out_frames) {
+            break;
+        }
+    }
+    out.resize(o * static_cast<size_t>(channels));
     return out;
 }
 

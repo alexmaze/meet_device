@@ -58,6 +58,7 @@ public:
     esp_err_t TeachingPrepareChatOnly(const std::string& conversation_id);
     esp_err_t CompleteConversation(const std::string& conversation_id, int last_sequence);
     esp_err_t GetAuthMe(MeetAuthMe& out);
+    bool ConsumeUnauthorized();
 
 private:
     MeetApi() = default;
@@ -70,6 +71,7 @@ private:
 
     std::string origin_;
     std::string bearer_;
+    bool unauthorized_ = false;
 };
 
 }  // namespace meet

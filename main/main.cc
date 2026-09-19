@@ -2,7 +2,6 @@
 #include "board.h"
 #include "pcm_pipeline.h"
 #include "ui.h"
-#include "wake_word.h"
 
 #include <esp_event.h>
 #include <esp_log.h>
@@ -45,8 +44,6 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(meet::Board::Instance().Init());
     ESP_ERROR_CHECK(meet::UiInit());
     ESP_ERROR_CHECK(meet::PcmPipeline::Instance().Init());
-    meet::WakeWord::Instance().Start();
-
     ESP_ERROR_CHECK(meet::AppController::Instance().Start());
 
     xTaskCreate(UiTask, "ui", 8192, nullptr, 5, nullptr);

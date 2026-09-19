@@ -3,6 +3,7 @@
 #include <esp_log.h>
 #include <nvs_flash.h>
 #include <nvs.h>
+#include <cstdint>
 #include <cstring>
 
 namespace meet {
@@ -49,6 +50,24 @@ esp_err_t MeetNvsLoad(MeetConfig& out) {
     if (err == ESP_OK) err = ReadString(h, MeetNvsKeys::kDeviceId, out.device_id);
     if (err == ESP_OK) err = ReadString(h, MeetNvsKeys::kCharacterId, out.selected_character_id);
     if (err == ESP_OK) err = ReadString(h, MeetNvsKeys::kCharacterName, out.selected_character_name);
+    if (err == ESP_OK) {
+        uint8_t landscape = 0;
+        const esp_err_t le = nvs_get_u8(h, MeetNvsKeys::kLandscape, &landscape);
+        if (le == ESP_OK) {
+            out.landscape = landscape != 0;
+        } else if (le != ESP_ERR_NVS_NOT_FOUND) {
+            err = le;
+        }
+    }
+    if (err == ESP_OK) {
+        uint8_t volume = 70;
+        const esp_err_t ve = nvs_get_u8(h, MeetNvsKeys::kVolume, &volume);
+        if (ve == ESP_OK) {
+            out.volume = volume;
+        } else if (ve != ESP_ERR_NVS_NOT_FOUND) {
+            err = ve;
+        }
+    }
     nvs_close(h);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "load partial failure: %s", esp_err_to_name(err));
@@ -67,6 +86,15 @@ esp_err_t MeetNvsSave(const MeetConfig& in) {
     if (err == ESP_OK) err = WriteString(h, MeetNvsKeys::kDeviceId, in.device_id);
     if (err == ESP_OK) err = WriteString(h, MeetNvsKeys::kCharacterId, in.selected_character_id);
     if (err == ESP_OK) err = WriteString(h, MeetNvsKeys::kCharacterName, in.selected_character_name);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, MeetNvsKeys::kLandscape, in.landscape ? 1 : 0);
+    }
+    if (err == ESP_OK) {
+        int volume = in.volume;
+        if (volume < 0) volume = 0;
+        if (volume > 100) volume = 100;
+        err = nvs_set_u8(h, MeetNvsKeys::kVolume, static_cast<uint8_t>(volume));
+    }
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }

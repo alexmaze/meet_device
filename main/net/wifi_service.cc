@@ -97,6 +97,17 @@ bool WifiService::ConsumePhaseChange() {
     return true;
 }
 
+int WifiService::rssi() const {
+    if (phase_ != WifiPhase::Connected) {
+        return 0;
+    }
+    wifi_ap_record_t ap = {};
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return 0;
+    }
+    return ap.rssi;
+}
+
 esp_err_t WifiService::InitStack() {
     if (inited_) {
         return ESP_OK;

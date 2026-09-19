@@ -28,6 +28,7 @@ public:
     const std::string& ap_url() const { return ap_url_; }
     const std::string& display_name() const { return display_name_; }
     bool ConsumePhaseChange();
+    int rssi() const;
 
 private:
     WifiService() = default;
