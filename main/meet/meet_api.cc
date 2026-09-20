@@ -1,5 +1,7 @@
 #include "meet_api.h"
 
+#include "app_event.h"
+
 #include <cJSON.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
@@ -38,10 +40,16 @@ std::string MakeUuidV4() {
     b[8] = static_cast<uint8_t>((b[8] & 0x3f) | 0x80);
     char out[37];
     snprintf(out, sizeof(out),
-             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11],
-             b[12], b[13], b[14], b[15]);
+             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", b[0], b[1],
+             b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14],
+             b[15]);
     return out;
+}
+
+void NotifyUnauthorized() {
+    AppEvent ev;
+    ev.type = AppEventType::Unauthorized;
+    AppEventPost(ev);
 }
 
 }  // namespace
@@ -83,8 +91,6 @@ esp_err_t MeetApi::HttpJson(const char* method,
         config.method = HTTP_METHOD_POST;
     } else if (strcmp(method, "PATCH") == 0) {
         config.method = HTTP_METHOD_PATCH;
-    } else if (strcmp(method, "GET") == 0) {
-        config.method = HTTP_METHOD_GET;
     }
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -109,11 +115,9 @@ esp_err_t MeetApi::HttpJson(const char* method,
     }
     if (err == ESP_OK) {
         response_body.assign(buf.data.begin(), buf.data.end());
-        ESP_LOGD(TAG, "%s %s -> %d (%u bytes)", method, path.c_str(), status,
-                 static_cast<unsigned>(response_body.size()));
         if (status == 401 && !bearer_.empty()) {
-            unauthorized_ = true;
-            ESP_LOGW(TAG, "%s %s -> 401, credential invalid", method, path.c_str());
+            ESP_LOGW(TAG, "%s %s -> 401", method, path.c_str());
+            NotifyUnauthorized();
         }
         if (status < 200 || status >= 300) {
             err = ESP_FAIL;
@@ -163,7 +167,8 @@ esp_err_t MeetApi::PollPairingSession(const std::string& session_id, MeetPairing
     int status = 0;
     const std::string path = "/api/devices/pairing-sessions/" + session_id;
     esp_err_t err = HttpJson("GET", path, nullptr, body, &status);
-    if (status == 404) {
+    // Backend: 410 = expired, 404 = not found, 409 = credential already delivered.
+    if (status == 410 || status == 404 || status == 409) {
         out.expired = true;
         return ESP_OK;
     }
@@ -182,7 +187,8 @@ esp_err_t MeetApi::PollPairingSession(const std::string& session_id, MeetPairing
         const cJSON* device_id = cJSON_GetObjectItem(root, "deviceId");
         if (cJSON_IsString(device_id)) out.device_id = device_id->valuestring;
         if (out.device_credential.empty()) {
-            out.claimed = false;  // credential already delivered once
+            out.claimed = false;
+            out.expired = true;  // already delivered once
         }
     }
     cJSON_Delete(root);
@@ -202,9 +208,6 @@ esp_err_t MeetApi::ListCharacters(std::vector<MeetCharacter>& out) {
         return ESP_ERR_INVALID_RESPONSE;
     }
     const cJSON* arr = cJSON_GetObjectItem(root, "characters");
-    if (!cJSON_IsArray(arr)) {
-        arr = root;  // tolerate raw array
-    }
     if (cJSON_IsArray(arr)) {
         const cJSON* item = nullptr;
         cJSON_ArrayForEach(item, arr) {
@@ -225,6 +228,7 @@ esp_err_t MeetApi::ListCharacters(std::vector<MeetCharacter>& out) {
 esp_err_t MeetApi::GetCharacterRuntime(const std::string& character_id, MeetCharacterRuntime& out) {
     out = MeetCharacterRuntime{};
     out.character_id = character_id;
+    out.max_history_turns = kMeetMaxHistoryTurns;
     std::string body;
     int status = 0;
     const std::string path = "/api/characters/" + character_id + "/runtime";
@@ -236,7 +240,6 @@ esp_err_t MeetApi::GetCharacterRuntime(const std::string& character_id, MeetChar
     if (!root) {
         return ESP_ERR_INVALID_RESPONSE;
     }
-    // Prefer nested realtime / runtime shapes used by Meet web.
     const cJSON* realtime = cJSON_GetObjectItem(root, "realtime");
     const cJSON* src = realtime ? realtime : root;
     const cJSON* voice = cJSON_GetObjectItem(src, "voice");
@@ -248,15 +251,11 @@ esp_err_t MeetApi::GetCharacterRuntime(const std::string& character_id, MeetChar
     if (cJSON_IsString(voice)) out.voice = voice->valuestring;
     if (cJSON_IsString(instructions)) out.instructions = instructions->valuestring;
     if (cJSON_IsString(provider)) out.provider = provider->valuestring;
-    const cJSON* turns = cJSON_GetObjectItem(src, "maxHistoryTurns");
-    if (!turns) turns = cJSON_GetObjectItem(root, "max_history_turns");
-    if (cJSON_IsNumber(turns)) out.max_history_turns = turns->valueint;
+    // HTTP runtime does not return maxHistoryTurns; always use kMeetMaxHistoryTurns.
     cJSON_Delete(root);
     if (out.voice.empty() || out.instructions.empty()) {
         return ESP_ERR_INVALID_RESPONSE;
     }
-    if (out.max_history_turns < 1) out.max_history_turns = 50;
-    if (out.max_history_turns > 50) out.max_history_turns = 50;
     return ESP_OK;
 }
 
@@ -323,10 +322,60 @@ esp_err_t MeetApi::CompleteConversation(const std::string& conversation_id, int 
     return HttpJson("POST", path, payload, body, &status);
 }
 
-bool MeetApi::ConsumeUnauthorized() {
-    const bool value = unauthorized_;
-    unauthorized_ = false;
-    return value;
+esp_err_t MeetApi::ReportIdentity(const std::string& serial, const std::string& firmware_version) {
+    cJSON* root = cJSON_CreateObject();
+    if (!serial.empty()) {
+        cJSON_AddStringToObject(root, "serial", serial.c_str());
+    }
+    if (!firmware_version.empty()) {
+        cJSON_AddStringToObject(root, "firmwareVersion", firmware_version.c_str());
+    }
+    char* raw = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!raw) {
+        return ESP_ERR_NO_MEM;
+    }
+    std::string body;
+    int status = 0;
+    esp_err_t err = HttpJson("PATCH", "/api/devices/me", raw, body, &status);
+    cJSON_free(raw);
+    return err;
+}
+
+esp_err_t MeetApi::CheckFirmware(const std::string& current,
+                                 const std::string& serial,
+                                 MeetFirmwareInfo& out) {
+    out = MeetFirmwareInfo{};
+    std::string path = "/api/devices/firmware?current=";
+    path += current.empty() ? "0.0.0" : current;
+    if (!serial.empty()) {
+        path += "&serial=";
+        path += serial;
+    }
+    std::string body;
+    int status = 0;
+    esp_err_t err = HttpJson("GET", path, nullptr, body, &status);
+    if (err != ESP_OK) {
+        return err;
+    }
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (!root) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    const cJSON* available = cJSON_GetObjectItem(root, "available");
+    const cJSON* version = cJSON_GetObjectItem(root, "version");
+    const cJSON* url = cJSON_GetObjectItem(root, "url");
+    const cJSON* sha = cJSON_GetObjectItem(root, "sha256");
+    const cJSON* size = cJSON_GetObjectItem(root, "size");
+    const cJSON* force = cJSON_GetObjectItem(root, "force");
+    out.available = cJSON_IsTrue(available);
+    if (cJSON_IsString(version)) out.version = version->valuestring;
+    if (cJSON_IsString(url)) out.url = url->valuestring;
+    if (cJSON_IsString(sha)) out.sha256 = sha->valuestring;
+    if (cJSON_IsNumber(size)) out.size = static_cast<size_t>(size->valuedouble);
+    out.force = cJSON_IsTrue(force);
+    cJSON_Delete(root);
+    return ESP_OK;
 }
 
 esp_err_t MeetApi::GetAuthMe(MeetAuthMe& out) {

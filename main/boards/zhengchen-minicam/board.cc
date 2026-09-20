@@ -1,5 +1,8 @@
 #include "board.h"
 
+#include "app_event.h"
+#include "ui.h"
+
 #include <esp_adc/adc_cali_scheme.h>
 #include <esp_check.h>
 #include <esp_log.h>
@@ -17,7 +20,6 @@ constexpr char TAG[] = "board";
 constexpr int kBacklightLedcChannel = LEDC_CHANNEL_0;
 constexpr int kBacklightLedcTimer = LEDC_TIMER_0;
 constexpr int kDebounceMs = 40;
-constexpr int kDoubleClickMs = 400;
 constexpr int kLongPressMs = 3000;
 
 }  // namespace
@@ -49,6 +51,13 @@ esp_err_t Board::InitI2c() {
     return i2c_new_master_bus(&cfg, &i2c_bus_);
 }
 
+bool Board::OnColorTransDone(esp_lcd_panel_io_handle_t /*panel_io*/,
+                             esp_lcd_panel_io_event_data_t* /*edata*/,
+                             void* /*user_ctx*/) {
+    UiNotifyFlushDone();
+    return false;
+}
+
 esp_err_t Board::InitSpiLcd() {
     spi_bus_config_t buscfg = {};
     buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
@@ -67,6 +76,8 @@ esp_err_t Board::InitSpiLcd() {
     io_config.trans_queue_depth = 10;
     io_config.lcd_cmd_bits = 8;
     io_config.lcd_param_bits = 8;
+    io_config.on_color_trans_done = OnColorTransDone;
+    io_config.user_ctx = this;
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &lcd_io_), TAG, "panel_io");
 
     esp_lcd_panel_dev_config_t panel_config = {};
@@ -151,17 +162,15 @@ esp_err_t Board::InitBootButton() {
     ESP_RETURN_ON_ERROR(gpio_config(&state), TAG, "state_gpio");
     gpio_set_level(STATE_OUTPUT_GPIO, 1);
 
-    xTaskCreate(BootButtonTask, "boot_btn", 3072, this, 5, nullptr);
+    xTaskCreate(BootButtonTask, "boot_btn", 2560, this, 5, nullptr);
     return ESP_OK;
 }
 
 void Board::BootButtonTask(void* arg) {
     auto* self = static_cast<Board*>(arg);
-    int clicks = 0;
     bool holding = false;
     bool long_fired = false;
     TickType_t down_tick = 0;
-    TickType_t last_down = 0;
 
     while (true) {
         const int level = gpio_get_level(BOOT_BUTTON_GPIO);
@@ -178,49 +187,22 @@ void Board::BootButtonTask(void* arg) {
             } else if (!long_fired &&
                        (xTaskGetTickCount() - down_tick) > pdMS_TO_TICKS(kLongPressMs)) {
                 long_fired = true;
-                clicks = 0;
-                if (self->on_boot_long_press_) {
-                    self->on_boot_long_press_();
-                }
+                AppEvent ev;
+                ev.type = AppEventType::BootLongPress;
+                AppEventPost(ev);
             }
         } else if (holding) {
             holding = false;
             if (!long_fired) {
-                const TickType_t now = xTaskGetTickCount();
-                if (clicks > 0 && (now - last_down) < pdMS_TO_TICKS(kDoubleClickMs)) {
-                    clicks = 0;
-                    if (self->on_boot_double_click_) {
-                        self->on_boot_double_click_();
-                    }
-                } else {
-                    clicks = 1;
-                    last_down = now;
-                }
-            }
-        } else if (clicks == 1 && (xTaskGetTickCount() - last_down) > pdMS_TO_TICKS(kDoubleClickMs)) {
-            clicks = 0;
-            if (self->on_boot_click_) {
-                self->on_boot_click_();
+                // Immediate click — no double-click wait.
+                AppEvent ev;
+                ev.type = AppEventType::BootClick;
+                AppEventPost(ev);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(20));
+        (void)self;
     }
-}
-
-void Board::SetBootClickHandler(BootClickCallback cb) {
-    on_boot_click_ = std::move(cb);
-}
-
-void Board::SetBootDoubleClickHandler(BootDoubleClickCallback cb) {
-    on_boot_double_click_ = std::move(cb);
-}
-
-void Board::SetBootLongPressHandler(BootLongPressCallback cb) {
-    on_boot_long_press_ = std::move(cb);
-}
-
-void Board::SetVolumeKeyHandler(VolumeKeyCallback cb) {
-    on_volume_key_ = std::move(cb);
 }
 
 void Board::HandleAdcVolumeKey(int voltage_mv) {
@@ -244,10 +226,16 @@ void Board::HandleAdcVolumeKey(int voltage_mv) {
         return;
     }
 
-    if (new_state == AdcVolumeKeyState::VolumeDown && on_volume_key_) {
-        on_volume_key_(-10);
-    } else if (new_state == AdcVolumeKeyState::VolumeUp && on_volume_key_) {
-        on_volume_key_(10);
+    if (new_state == AdcVolumeKeyState::VolumeDown) {
+        AppEvent ev;
+        ev.type = AppEventType::VolumeKey;
+        ev.i32 = -10;
+        AppEventPost(ev);
+    } else if (new_state == AdcVolumeKeyState::VolumeUp) {
+        AppEvent ev;
+        ev.type = AppEventType::VolumeKey;
+        ev.i32 = 10;
+        AppEventPost(ev);
     }
     volume_key_state_ = new_state;
 }
@@ -372,9 +360,9 @@ esp_err_t Board::InitAdc() {
     if (!adc_mutex_) {
         return ESP_ERR_NO_MEM;
     }
-    xTaskCreate(AdcReadTask, "adc_bat", 3072, this, 4, nullptr);
-    xTaskCreatePinnedToCore(VolumeKeyTask, "adc_vol", 3072, this, 6, nullptr, 1);
-    ESP_LOGI(TAG, "ADC battery GPIO3/4 + volume GPIO9 ready");
+    xTaskCreate(AdcReadTask, "adc_bat", 2560, this, 4, nullptr);
+    xTaskCreatePinnedToCore(VolumeKeyTask, "adc_vol", 2560, this, 6, nullptr, 1);
+    ESP_LOGI(TAG, "ADC battery + volume ready");
     return ESP_OK;
 }
 

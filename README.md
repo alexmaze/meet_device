@@ -4,7 +4,7 @@
 
 ## 要求
 
-- ESP-IDF **≥ 5.5.2**
+- ESP-IDF **≥ 5.5.2**（当前锁文件构建环境为 **IDF 6.1.x**）
 - 目标芯片：`esp32s3`
 - 后端：私有 **Meet** 服务（非 xiaozhi.me），需已迁移 `0024_companion_devices`
 
@@ -20,14 +20,20 @@ idf.py build
 
 - `MEET_SERVER_URL`：家庭 Meet Origin（默认 `https://meet.refme.cc`）
 - `MEET_IDLE_HANGUP_MS`：空闲挂断（默认 90000）
-- `MEET_USE_DEVICE_AEC`：设备端 AEC 钩子（默认开）
+- `MEET_USE_DEVICE_AEC`：设备端 AEC（默认开）
 
 ## 产品流程
 
 1. 设备联网后进入 **Pairing**，向 `POST /api/devices/pairing-sessions` 申请 6 位码并显示
 2. 家庭成员在网页「我的 → 陪伴设备」输入配对码完成绑定，设备轮询拿到 **DeviceCredential**
-3. **Ready**：Boot 单击 / 唤醒词进入 **InCall**；双击进设置（切角色、重新配对）
-4. **InCall**：拉 runtime → 建会话 → 儿童强制 `chat_only` prepare → WebSocket PCM 全双工；插话清空播放队列；IdleHangup 后 `complete`
+3. **Ready**：Boot 单击 / 唤醒词进入 **InCall**；长按进设置（切角色、重新配对、重新配网、检查更新）
+4. **InCall**：建会话 → 儿童 `chat_only` prepare → WebSocket PCM 全双工；插话清空播放队列；IdleHangup 后 `complete`
+
+按键：Boot 单击接通/挂断（设置内激活项）；Boot 长按进出设置；音量键调音量（设置内上下移动）。
+
+## 架构要点
+
+控制面走 `AppEvent` 队列（`app` 任务唯一持有状态）；音频数据面直连；UI 命令队列独占 LVGL。见 [ADR-0003](./docs/adr/0003-event-queue-and-planes.md)。
 
 ## 边界
 
@@ -36,12 +42,17 @@ idf.py build
 | 太空舱 / zhengchen-minicam 板级 | 引脚、I2C/SPI、ST7789、ES8388、Boot/音量 ADC |
 | Meet WebSocket PCM realtime | 双工通话协议（`session.update` / PCM base64 / `response.audio.delta`） |
 
-板级与音频路径参考太空舱资料；会话与协议走 Meet HTTP + WebSocket，不使用 xiaozhi opus 会话栈。
+I2S 默认 **16 kHz**（与 AFE / 上行对齐）；下行 24 kHz 经抗混叠重采样到 16 kHz 播放。
 
 ## 当前实现状态
 
-- P0 已落地：SoftAP 配网 + STA、ES8388 采集/播放、配对过期重试、Connecting / 断线回 Ready、SourceHan 中文
-- 仍为 stub / P1：esp-sr 唤醒词与 AEC、音量/电量 ADC、完整横竖屏菜单
+系统性改造后：
+
+- 事件队列 + 常驻音频链路 + Settings 单例 + UI 单线程
+- SoftAP 配网（表单提交无死锁）、配对 410/409、Connecting 先反馈、runtime 预取
+- 儿童 teaching `audio_gate` ACK、OTA 回滚配置、分区表按实际 model 体积调整
+
+仍需真机验证：ES8388@16kHz、AEC/插话、唤醒率、teaching 闸门、配网切 STA。
 
 ## 领域词与方案
 
@@ -49,15 +60,17 @@ idf.py build
 - 整机产品与技术方案：[docs/product-and-architecture.md](./docs/product-and-architecture.md)
 - 协议边界：[docs/adr/0001-meet-pcm-over-xiaozhi-protocol.md](./docs/adr/0001-meet-pcm-over-xiaozhi-protocol.md)
 - 工程策略：[docs/adr/0002-port-minicam-layers-not-fork-xiaozhi.md](./docs/adr/0002-port-minicam-layers-not-fork-xiaozhi.md)
+- 并发模型：[docs/adr/0003-event-queue-and-planes.md](./docs/adr/0003-event-queue-and-planes.md)
 
 ## 目录概览
 
 ```
 main/
   boards/zhengchen-minicam/  # 板级 bring-up
-  app/                       # 状态机 / 控制器
-  ui/                        # LVGL 占位屏
-  meet/                      # HTTP API + realtime WS
-  audio/                     # PCM pipeline / wake stub
+  app/                       # 事件队列 / Settings / 状态机
+  ui/                        # LVGL（命令队列）+ face
+  meet/                      # HTTP API + realtime WS（不依赖 audio/）
+  audio/                     # 常驻 pipeline / AfeUnit / resampler
+  net/                       # SoftAP · STA
   main.cc
 ```

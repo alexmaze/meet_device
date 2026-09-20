@@ -198,19 +198,26 @@ void Es8388Codec::SetOutputVolume(int volume) {
 }
 
 int Es8388Codec::Read(int16_t* dest, int samples) {
-    if (!input_on_ || !dest) {
+    if (!input_on_ || !dest || samples <= 0) {
         return 0;
     }
-    esp_codec_dev_read(input_dev_, dest, samples * static_cast<int>(sizeof(int16_t)));
+    const esp_err_t err =
+        esp_codec_dev_read(input_dev_, dest, samples * static_cast<int>(sizeof(int16_t)));
+    if (err != ESP_OK) {
+        return 0;
+    }
     return samples;
 }
 
 int Es8388Codec::Write(const int16_t* data, int samples) {
-    if (!output_on_ || !data) {
+    if (!output_on_ || !data || samples <= 0) {
         return 0;
     }
-    esp_codec_dev_write(output_dev_, const_cast<int16_t*>(data),
-                        samples * static_cast<int>(sizeof(int16_t)));
+    const esp_err_t err = esp_codec_dev_write(output_dev_, const_cast<int16_t*>(data),
+                                              samples * static_cast<int>(sizeof(int16_t)));
+    if (err != ESP_OK) {
+        return 0;
+    }
     return samples;
 }
 

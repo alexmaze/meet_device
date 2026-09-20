@@ -35,8 +35,8 @@ private:
     bool output_on_ = false;
     bool input_reference_ = true;
     int input_channels_ = 2;
-    int input_rate_ = 24000;
-    int output_rate_ = 24000;
+    int input_rate_ = 16000;
+    int output_rate_ = 16000;
     int volume_ = 70;
 
     const void* data_if_ = nullptr;

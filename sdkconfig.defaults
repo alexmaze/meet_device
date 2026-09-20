@@ -37,6 +37,10 @@ CONFIG_ESP_TLS_USING_MBEDTLS=y
 CONFIG_MEET_SERVER_URL="https://meet.refme.cc"
 CONFIG_MEET_IDLE_HANGUP_MS=90000
 CONFIG_MEET_USE_DEVICE_AEC=y
+CONFIG_MEET_FIRMWARE_VERSION="0.3.0"
+
+# OTA rollback — mark valid only after first successful backend contact
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Wake word: 嗨乐鑫 (packed into the `model` partition)
 CONFIG_MODEL_IN_FLASH=y

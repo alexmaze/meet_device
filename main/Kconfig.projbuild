@@ -19,4 +19,10 @@ config MEET_USE_DEVICE_AEC
     help
         Run AFE_TYPE_VC with the ES8388 reference channel during InCall.
 
+config MEET_FIRMWARE_VERSION
+    string "Companion firmware version"
+    default "0.3.0"
+    help
+        Reported to Meet via PATCH /api/devices/me and compared during OTA check.
+
 endmenu

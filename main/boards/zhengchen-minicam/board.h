@@ -8,19 +8,13 @@
 #include <esp_adc/adc_oneshot.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
-#include <functional>
 #include <cstdint>
 
 namespace meet {
 
-using BootClickCallback = std::function<void()>;
-using BootDoubleClickCallback = std::function<void()>;
-using BootLongPressCallback = std::function<void()>;
-using VolumeKeyCallback = std::function<void(int delta)>;
-
 /**
- * Simplified zhengchen-minicam board bring-up.
- * Self-contained — no xiaozhi Application / Display stack.
+ * zhengchen-minicam board bring-up.
+ * Input handlers post AppEvents — no heavy callbacks.
  */
 class Board {
 public:
@@ -31,17 +25,11 @@ public:
     i2c_master_bus_handle_t i2c_bus() const { return i2c_bus_; }
     esp_lcd_panel_handle_t lcd_panel() const { return lcd_panel_; }
     esp_lcd_panel_io_handle_t lcd_io() const { return lcd_io_; }
-    int display_width() const { return landscape_ ? DISPLAY_HEIGHT : DISPLAY_WIDTH; }
-    int display_height() const { return landscape_ ? DISPLAY_WIDTH : DISPLAY_HEIGHT; }
-    bool landscape() const { return landscape_; }
+    int display_width() const { return DISPLAY_WIDTH; }
+    int display_height() const { return DISPLAY_HEIGHT; }
 
     void SetBacklightPercent(int percent);
-    void SetBootClickHandler(BootClickCallback cb);
-    void SetBootDoubleClickHandler(BootDoubleClickCallback cb);
-    void SetBootLongPressHandler(BootLongPressCallback cb);
-    void SetVolumeKeyHandler(VolumeKeyCallback cb);
-
-    void ApplyOrientation(bool landscape);
+    void ApplyOrientation(bool landscape);  // hardware path retained for future use
     void SetTalking(bool talking);
 
     int battery_percent() const { return battery_percent_; }
@@ -68,6 +56,9 @@ private:
     static void BootButtonTask(void* arg);
     static void AdcReadTask(void* arg);
     static void VolumeKeyTask(void* arg);
+    static bool OnColorTransDone(esp_lcd_panel_io_handle_t panel_io,
+                                 esp_lcd_panel_io_event_data_t* edata,
+                                 void* user_ctx);
 
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     esp_lcd_panel_io_handle_t lcd_io_ = nullptr;
@@ -75,11 +66,6 @@ private:
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
     adc_cali_handle_t adc_cali_handle_ = nullptr;
     void* adc_mutex_ = nullptr;
-
-    BootClickCallback on_boot_click_;
-    BootDoubleClickCallback on_boot_double_click_;
-    BootLongPressCallback on_boot_long_press_;
-    VolumeKeyCallback on_volume_key_;
 
     static constexpr size_t kBatteryAverageWindowSize = 8;
     int battery_samples_mv_[kBatteryAverageWindowSize] = {};

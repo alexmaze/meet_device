@@ -1,4 +1,4 @@
-#include "wake_word.h"
+#include "afe_unit.h"
 
 #include "sr_models.h"
 
@@ -9,33 +9,37 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
+#include <sdkconfig.h>
 #include <string>
 
 namespace meet {
 namespace {
 
-constexpr char TAG[] = "wake";
+constexpr char TAG[] = "afe_unit";
 constexpr EventBits_t kRunning = 0x01;
 
 }  // namespace
 
-WakeWord& WakeWord::Instance() {
-    static WakeWord w;
-    return w;
-}
-
-esp_err_t WakeWord::Init(int channels, bool input_reference) {
+esp_err_t AfeUnit::Init(AfeUnitType type,
+                        int channels,
+                        bool input_reference,
+                        bool enable_aec,
+                        const char* task_name,
+                        uint32_t stack_size,
+                        UBaseType_t priority) {
     if (ready_) {
         return ESP_OK;
     }
-    if (!SrModels()) {
-        ESP_LOGW(TAG, "no models; Boot remains the call trigger");
-        return ESP_ERR_NOT_FOUND;
-    }
+    type_ = type;
     channels_ = channels > 0 ? channels : 2;
     event_group_ = xEventGroupCreate();
     if (!event_group_) {
         return ESP_ERR_NO_MEM;
+    }
+
+    if (type == AfeUnitType::WakeWord && !SrModels()) {
+        ESP_LOGW(TAG, "no SR models; wake stays unavailable");
+        return ESP_ERR_NOT_FOUND;
     }
 
     int ref_num = input_reference ? 1 : 0;
@@ -47,40 +51,54 @@ esp_err_t WakeWord::Init(int channels, bool input_reference) {
         fmt.push_back('R');
     }
 
-    afe_config_t* cfg = afe_config_init(fmt.c_str(), SrModels(), AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
+    const afe_type_t afe_type =
+        (type == AfeUnitType::WakeWord) ? AFE_TYPE_SR : AFE_TYPE_VC;
+    afe_config_t* cfg =
+        afe_config_init(fmt.c_str(), SrModels(), afe_type, AFE_MODE_HIGH_PERF);
     if (!cfg) {
+        ESP_LOGW(TAG, "afe_config_init failed type=%d", static_cast<int>(type));
         return ESP_FAIL;
     }
-    cfg->aec_init = input_reference;
-    cfg->aec_mode = AEC_MODE_SR_HIGH_PERF;
-    cfg->afe_perferred_core = 1;
-    cfg->afe_perferred_priority = 1;
+
+    if (type == AfeUnitType::WakeWord) {
+        cfg->aec_init = input_reference;
+        cfg->aec_mode = AEC_MODE_SR_HIGH_PERF;
+        cfg->afe_perferred_core = 1;
+        cfg->afe_perferred_priority = 1;
+    } else {
+        cfg->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
+        cfg->aec_init = enable_aec;
+        cfg->vad_init = !enable_aec;
+        cfg->agc_init = false;
+    }
     cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
     auto* iface = esp_afe_handle_from_config(cfg);
     if (!iface) {
+        ESP_LOGW(TAG, "esp_afe_handle_from_config failed");
         return ESP_FAIL;
     }
     afe_iface_ = iface;
     afe_data_ = iface->create_from_config(cfg);
     if (!afe_data_) {
+        ESP_LOGW(TAG, "create_from_config failed");
         return ESP_FAIL;
     }
-    xTaskCreate(DetectionTask, "wake_det", 4096, this, 3, nullptr);
+
+    xTaskCreate(Task, task_name ? task_name : "afe", stack_size, this, priority, nullptr);
     ready_ = true;
-    ESP_LOGI(TAG, "AFE wake ready fmt=%s", fmt.c_str());
+    ESP_LOGI(TAG, "ready type=%d fmt=%s aec=%d", static_cast<int>(type), fmt.c_str(),
+             cfg->aec_init ? 1 : 0);
     return ESP_OK;
 }
 
-esp_err_t WakeWord::Start() {
-    if (!ready_) {
-        return ESP_ERR_INVALID_STATE;
+void AfeUnit::Start() {
+    if (event_group_) {
+        xEventGroupSetBits(static_cast<EventGroupHandle_t>(event_group_), kRunning);
     }
-    xEventGroupSetBits(static_cast<EventGroupHandle_t>(event_group_), kRunning);
-    return ESP_OK;
 }
 
-void WakeWord::Stop() {
+void AfeUnit::Stop() {
     if (event_group_) {
         xEventGroupClearBits(static_cast<EventGroupHandle_t>(event_group_), kRunning);
     }
@@ -93,14 +111,14 @@ void WakeWord::Stop() {
     feed_buf_.clear();
 }
 
-bool WakeWord::running() const {
+bool AfeUnit::running() const {
     if (!event_group_) {
         return false;
     }
     return xEventGroupGetBits(static_cast<EventGroupHandle_t>(event_group_)) & kRunning;
 }
 
-void WakeWord::FeedInterleaved16k(const int16_t* data, size_t samples) {
+void AfeUnit::FeedInterleaved16k(const int16_t* data, size_t samples) {
     auto* iface = static_cast<const esp_afe_sr_iface_t*>(afe_iface_);
     auto* afe = static_cast<esp_afe_sr_data_t*>(afe_data_);
     if (!iface || !afe || !data || samples == 0) {
@@ -111,7 +129,8 @@ void WakeWord::FeedInterleaved16k(const int16_t* data, size_t samples) {
         return;
     }
     feed_buf_.insert(feed_buf_.end(), data, data + samples);
-    const size_t chunk = static_cast<size_t>(iface->get_feed_chunksize(afe)) * static_cast<size_t>(channels_);
+    const size_t chunk =
+        static_cast<size_t>(iface->get_feed_chunksize(afe)) * static_cast<size_t>(channels_);
     if (chunk == 0) {
         return;
     }
@@ -121,12 +140,16 @@ void WakeWord::FeedInterleaved16k(const int16_t* data, size_t samples) {
     }
 }
 
-void WakeWord::SetOnDetected(WakeWordDetectedCb cb) {
-    on_detected_ = std::move(cb);
+void AfeUnit::SetOutputHandler(AfeOutputCb cb) {
+    on_output_ = std::move(cb);
 }
 
-void WakeWord::DetectionTask(void* arg) {
-    auto* self = static_cast<WakeWord*>(arg);
+void AfeUnit::SetWakeHandler(AfeWakeCb cb) {
+    on_wake_ = std::move(cb);
+}
+
+void AfeUnit::Task(void* arg) {
+    auto* self = static_cast<AfeUnit*>(arg);
     auto* iface = static_cast<const esp_afe_sr_iface_t*>(self->afe_iface_);
     auto* afe = static_cast<esp_afe_sr_data_t*>(self->afe_data_);
     while (true) {
@@ -136,12 +159,16 @@ void WakeWord::DetectionTask(void* arg) {
         if (!self->running() || !res || res->ret_value == ESP_FAIL) {
             continue;
         }
-        if (res->wakeup_state == WAKENET_DETECTED) {
-            self->Stop();
-            ESP_LOGI(TAG, "wake word detected");
-            if (self->on_detected_) {
-                self->on_detected_();
+        if (self->type_ == AfeUnitType::WakeWord) {
+            if (res->wakeup_state == WAKENET_DETECTED) {
+                self->Stop();
+                ESP_LOGI(TAG, "wake word detected");
+                if (self->on_wake_) {
+                    self->on_wake_();
+                }
             }
+        } else if (self->on_output_ && res->data && res->data_size > 0) {
+            self->on_output_(res->data, res->data_size / sizeof(int16_t));
         }
     }
 }

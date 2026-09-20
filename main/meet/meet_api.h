@@ -1,5 +1,7 @@
 #pragma once
 
+#include "meet_realtime.h"
+
 #include <esp_err.h>
 #include <string>
 #include <vector>
@@ -38,7 +40,16 @@ struct MeetCharacterRuntime {
     std::string voice;
     std::string instructions;
     std::string provider;  // qwen | doubao
-    int max_history_turns = 50;
+    int max_history_turns = kMeetMaxHistoryTurns;
+};
+
+struct MeetFirmwareInfo {
+    bool available = false;
+    std::string version;
+    std::string url;
+    std::string sha256;
+    size_t size = 0;
+    bool force = false;
 };
 
 class MeetApi {
@@ -58,7 +69,10 @@ public:
     esp_err_t TeachingPrepareChatOnly(const std::string& conversation_id);
     esp_err_t CompleteConversation(const std::string& conversation_id, int last_sequence);
     esp_err_t GetAuthMe(MeetAuthMe& out);
-    bool ConsumeUnauthorized();
+    esp_err_t ReportIdentity(const std::string& serial, const std::string& firmware_version);
+    esp_err_t CheckFirmware(const std::string& current,
+                            const std::string& serial,
+                            MeetFirmwareInfo& out);
 
 private:
     MeetApi() = default;
@@ -71,7 +85,6 @@ private:
 
     std::string origin_;
     std::string bearer_;
-    bool unauthorized_ = false;
 };
 
 }  // namespace meet

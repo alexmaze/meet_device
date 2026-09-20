@@ -3,16 +3,21 @@ idf_component_register(
         "main.cc"
         "boards/zhengchen-minicam/board.cc"
         "app/app_state.cc"
+        "app/app_event.cc"
         "app/app_controller.cc"
+        "app/settings.cc"
         "ui/ui.cc"
-        "meet/meet_nvs.cc"
+        "ui/ui_face.cc"
+        "meet/factory_nvs.cc"
         "meet/meet_api.cc"
         "meet/meet_realtime.cc"
-        "audio/pcm_pipeline.cc"
+        "meet/meet_ota.cc"
+        "audio/audio_pipeline.cc"
         "audio/meet_es8388.cc"
-        "audio/wake_word.cc"
-        "audio/afe_processor.cc"
+        "audio/afe_unit.cc"
+        "audio/resampler.cc"
         "audio/sr_models.cc"
+        "audio/audio_cue.cc"
         "net/wifi_nvs.cc"
         "net/wifi_service.cc"
     INCLUDE_DIRS
@@ -31,6 +36,7 @@ idf_component_register(
         esp_http_server
         esp_http_client
         esp_https_ota
+        app_update
         espressif__esp_websocket_client
         esp_lcd
         esp_adc

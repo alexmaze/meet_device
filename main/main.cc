@@ -1,8 +1,10 @@
 #include "app_controller.h"
+#include "app_event.h"
+#include "audio_pipeline.h"
 #include "board.h"
-#include "pcm_pipeline.h"
 #include "ui.h"
 
+#include <sdkconfig.h>
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_netif.h>
@@ -21,16 +23,13 @@ void UiTask(void* /*arg*/) {
     }
 }
 
-void AppTickTask(void* /*arg*/) {
-    while (true) {
-        meet::AppController::Instance().Tick();
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+void AppTask(void* /*arg*/) {
+    meet::AppController::Instance().RunLoop();
 }
 }  // namespace
 
 extern "C" void app_main(void) {
-    ESP_LOGI(TAG, "Meet companion firmware 0.1.0");
+    ESP_LOGI(TAG, "Meet companion firmware %s", CONFIG_MEET_FIRMWARE_VERSION);
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -40,14 +39,15 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(ret);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(meet::AppEventQueueInit());
 
     ESP_ERROR_CHECK(meet::Board::Instance().Init());
     ESP_ERROR_CHECK(meet::UiInit());
-    ESP_ERROR_CHECK(meet::PcmPipeline::Instance().Init());
+    ESP_ERROR_CHECK(meet::AudioPipeline::Instance().Init());
     ESP_ERROR_CHECK(meet::AppController::Instance().Start());
 
-    xTaskCreate(UiTask, "ui", 8192, nullptr, 5, nullptr);
-    xTaskCreate(AppTickTask, "app_tick", 8192, nullptr, 5, nullptr);
+    xTaskCreate(UiTask, "ui", 6144, nullptr, 5, nullptr);
+    xTaskCreate(AppTask, "app", 12288, nullptr, 5, nullptr);
 
     ESP_LOGI(TAG, "running");
 }

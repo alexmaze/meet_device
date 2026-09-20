@@ -112,10 +112,13 @@ speech_started ──► ClearGeneration + response.cancel
 
 ## 存储
 
-NVS 分两块：
+NVS 分三块：
 
-- `wifi`：SSID / 密码
-- `meet`：origin、DeviceCredential、deviceId、SelectedCharacter、横竖屏
+- `wifi`：最多 3 组 SSID / 密码，记住上次成功的一组
+- `meet`：origin、DeviceCredential、deviceId、SelectedCharacter、横竖屏、音量
+- `factory`：写一次的序列号（空则按 MAC 生成 `MEET-XXXXXX`）
+
+16MB 分区：`ota_0` / `ota_1` 各 4MB，语音模型在 `0x820000`。OTA 走 Meet HTTPS，校验 sha256 后切分区重启。
 
 ## 协议稳健性
 
@@ -128,31 +131,34 @@ NVS 分两块：
 
 ## 屏幕
 
-状态栏（Wi-Fi / 电量）+ 大字主状态 + 设置列表。中文必须用 CJK 字体。P0 最低四屏：配网说明、配对码、待命（角色名）、通话中。表情 / GIF 放到更后。
+状态栏（Wi-Fi / 电量）+ 大字主状态 + 设置列表。中文必须用 CJK 字体。P0 最低四屏：配网说明、配对码、待命（角色名）、通话中。
+
+P2 待命/通话显示 64px 黄脸（太空舱同款 20 个 emotion 名），通话中用 `response.audio_transcript.*` 做当前一句字幕；优先显示中继下发的 `meet.emotion`。
 
 ## 分阶段
 
-**P0 — 家里能打通一通电话**
+**P0 — 家里能打通一通电话**（骨架已落地，待真机验收）
 
-1. SoftAP 配网 + STA
-2. 从太空舱搬 ES8388：真采集 + 真播放 + 16k/24k 对齐
-3. 配对过期重试、失败提示
-4. Connecting 态 + 等 `relay.ready` + 断线回 Ready
-5. 中文字体
+1. SoftAP 配网 + STA（表单提交经事件切 STA，避免 httpd 死锁）
+2. ES8388 真采集 + 真播放；I2S 16 kHz 原生上行；下行 24→16 重采样
+3. 配对过期重试（识别 410/409）、失败提示
+4. Connecting 先置态 + 等 `relay.ready` + 断线回 Ready
+5. 中文字体（缺字库则编译失败）
 
 **P1 — 能当日常设备**
 
-唤醒词、设备 AEC 全双工、音量 ADC、电量、横竖屏、设置菜单、凭证失效回配对。
+唤醒词、设备 AEC 全双工、音量 ADC、电量、设置菜单（角色浏览 / 重配对 / 重配网 / OTA）、凭证失效回配对。
 
-**P2 — 能铺货**
+**P2 — 能铺货（本轮已落地结构，不含拍照）**
 
-HTTPS OTA、断网 / 弱网提示音、多 SSID、字幕、表情、可选拍照、生产烧录 / 序列号。
+HTTPS OTA + rollback、`factory` 序列号上报、多 SSID、断网 / 弱网提示音、字幕、表情、`meet.emotion`、儿童 teaching 音频闸门 ACK。
 
-P0 不做：摄像头、MCP、4G、BluFi、小智 OTA 激活包。OTA 用 Meet 自己的 HTTPS 地址，第一版可继续 `idf.py flash`。
+P0 不做：摄像头、MCP、4G、BluFi、小智 OTA 激活包。
 
 ## 工程约束
 
 - 板级以太空舱 `main/boards/zhengchen-minicam/` 为准，不要抄官方 `zhengchen-cam`（ES8311+ES7210，引脚不同）。
 - 小智新代码只当参考，按模块移植进 `meet_esp32`。
-- 后端已有设备 API 够 P0；缺口在固件。
-- 网页继续承担绑定和管理；设备不输入账号密码。
+- 并发模型见 [ADR-0003](./adr/0003-event-queue-and-planes.md)：控制面事件队列、音频数据面直连、UI 单线程。
+- 后端已有设备 API 够通话路径；网页继续承担绑定和管理；设备不输入账号密码。
+- 长通话 `relay.renewal_*` 第一版仍不做：IdleHangup ~90s 通常先挂断；若产品要延长静音超时需补续接。

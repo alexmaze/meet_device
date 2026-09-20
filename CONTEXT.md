@@ -48,6 +48,14 @@ _Avoid_: 聆听中, 说话中
 Automatic end of Call after configurable idle period (default 90s). Completes the conversation and returns to Ready.
 _Avoid_: silence timeout as crash, close-without-complete
 
+**FactorySerial**:
+Write-once device serial in NVS `factory`. Empty boards persist `MEET-` plus MAC suffix.
+_Avoid_: DeviceCredential as serial, xiaozhi MAC activation
+
+**MeetEmotion**:
+Named face shown on Ready/InCall (`neutral`…`confused`, same 20 names as 太空舱). Local mapping plus optional `{type:"meet.emotion"}` from the Meet relay.
+_Avoid_: xiaozhi `llm` JSON, GIF/PSRAM emoji packs
+
 ## Avoid on device
 
 | Anti-pattern | Why |

@@ -1,5 +1,6 @@
 #include "wifi_service.h"
 
+#include "app_event.h"
 #include "wifi_nvs.h"
 
 #include <esp_event.h>
@@ -18,7 +19,7 @@ namespace meet {
 namespace {
 
 constexpr char TAG[] = "wifi";
-constexpr int kConnectTimeoutSec = 60;
+constexpr int kConnectTimeoutSec = 20;
 
 int HexVal(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -52,7 +53,8 @@ bool FormValue(const std::string& body, const char* key, std::string& out) {
     size_t pos = 0;
     while (pos < body.size()) {
         const size_t amp = body.find('&', pos);
-        const std::string part = body.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
+        const std::string part =
+            body.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
         if (part.rfind(prefix, 0) == 0) {
             out = UrlDecode(part.substr(prefix.size()));
             return true;
@@ -78,7 +80,14 @@ void WifiService::BuildIdentity() {
     char suffix[8];
     snprintf(suffix, sizeof(suffix), "%02X%02X", mac[4], mac[5]);
     ap_ssid_ = std::string("Meet-") + suffix;
-    display_name_ = std::string("太空舱-") + suffix;
+    display_name_ = std::string("Meet-") + suffix;
+}
+
+esp_err_t WifiService::WifiOp(esp_err_t err, const char* what) {
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "%s: %s", what, esp_err_to_name(err));
+    }
+    return err;
 }
 
 void WifiService::SetPhase(WifiPhase next) {
@@ -86,15 +95,10 @@ void WifiService::SetPhase(WifiPhase next) {
         return;
     }
     phase_ = next;
-    phase_dirty_ = true;
-}
-
-bool WifiService::ConsumePhaseChange() {
-    if (!phase_dirty_) {
-        return false;
-    }
-    phase_dirty_ = false;
-    return true;
+    AppEvent ev;
+    ev.type = AppEventType::WifiPhaseChanged;
+    ev.i32 = static_cast<int32_t>(next);
+    AppEventPost(ev);
 }
 
 int WifiService::rssi() const {
@@ -119,10 +123,10 @@ esp_err_t WifiService::InitStack() {
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, WifiEventHandler, this,
-                                                        nullptr));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, WifiEventHandler, this,
-                                                        nullptr));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                                        WifiEventHandler, this, nullptr));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                                        WifiEventHandler, this, nullptr));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
     esp_timer_create_args_t timer = {};
@@ -138,14 +142,14 @@ esp_err_t WifiService::InitStack() {
 
 esp_err_t WifiService::Start() {
     ESP_ERROR_CHECK(InitStack());
-    WifiCredentials cred;
-    WifiNvsLoad(cred);
-    if (cred.ssid.empty()) {
+    WifiNetworkList list;
+    WifiNvsLoadAll(list);
+    if (list.count <= 0) {
         StartSoftAp();
         return ESP_OK;
     }
-    sta_ssid_ = cred.ssid;
-    ConnectSta();
+    try_count_ = 0;
+    ConnectStaIndex(list.last_ok);
     return ESP_OK;
 }
 
@@ -157,32 +161,82 @@ void WifiService::EnterConfigMode() {
     StartSoftAp();
 }
 
+void WifiService::ConnectAfterProvision() {
+    ConnectSta();
+}
+
 void WifiService::ConnectSta() {
-    WifiCredentials cred;
-    WifiNvsLoad(cred);
-    if (cred.ssid.empty()) {
+    WifiNetworkList list;
+    WifiNvsLoadAll(list);
+    if (list.count <= 0) {
         StartSoftAp();
         return;
     }
+    try_count_ = 0;
+    ConnectStaIndex(list.last_ok);
+}
+
+void WifiService::ConnectStaIndex(int index) {
+    WifiNetworkList list;
+    WifiNvsLoadAll(list);
+    if (list.count <= 0) {
+        StartSoftAp();
+        return;
+    }
+    if (index < 0 || index >= list.count) {
+        index = 0;
+    }
+    try_index_ = index;
+    const WifiCredentials& cred = list.items[index];
     sta_ssid_ = cred.ssid;
     StopHttp();
-    ESP_ERROR_CHECK(esp_wifi_stop());
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    WifiOp(esp_wifi_stop(), "wifi_stop");
+    if (WifiOp(esp_wifi_set_mode(WIFI_MODE_STA), "set_mode STA") != ESP_OK) {
+        StartSoftAp();
+        return;
+    }
 
     wifi_config_t cfg = {};
     strncpy(reinterpret_cast<char*>(cfg.sta.ssid), cred.ssid.c_str(), sizeof(cfg.sta.ssid) - 1);
-    strncpy(reinterpret_cast<char*>(cfg.sta.password), cred.password.c_str(), sizeof(cfg.sta.password) - 1);
+    strncpy(reinterpret_cast<char*>(cfg.sta.password), cred.password.c_str(),
+            sizeof(cfg.sta.password) - 1);
     cfg.sta.threshold.authmode = cred.password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_connect());
+    if (WifiOp(esp_wifi_set_config(WIFI_IF_STA, &cfg), "set_config") != ESP_OK ||
+        WifiOp(esp_wifi_start(), "wifi_start") != ESP_OK) {
+        StartSoftAp();
+        return;
+    }
+    WifiOp(esp_wifi_connect(), "wifi_connect");
     if (connect_timer_) {
         esp_timer_stop(static_cast<esp_timer_handle_t>(connect_timer_));
         esp_timer_start_once(static_cast<esp_timer_handle_t>(connect_timer_),
                              static_cast<uint64_t>(kConnectTimeoutSec) * 1000000ULL);
     }
     SetPhase(WifiPhase::ConnectingSta);
-    ESP_LOGI(TAG, "STA connecting to %s", cred.ssid.c_str());
+    ESP_LOGI(TAG, "STA connecting to %s (%d/%d)", cred.ssid.c_str(), index + 1, list.count);
+}
+
+void WifiService::TryNextOrAp() {
+    WifiNetworkList list;
+    WifiNvsLoadAll(list);
+    try_count_ += 1;
+    if (list.count <= 0 || try_count_ >= list.count) {
+        ESP_LOGW(TAG, "all SSIDs failed → SoftAP");
+        StartSoftAp();
+        return;
+    }
+    const int next = (try_index_ + 1) % list.count;
+    ESP_LOGW(TAG, "STA timeout, try next SSID");
+    ConnectStaIndex(next);
+}
+
+void WifiService::MarkLastOk() {
+    WifiNetworkList list;
+    WifiNvsLoadAll(list);
+    if (try_index_ >= 0 && try_index_ < list.count) {
+        list.last_ok = try_index_;
+        WifiNvsSaveAll(list);
+    }
 }
 
 void WifiService::StartSoftAp() {
@@ -190,8 +244,10 @@ void WifiService::StartSoftAp() {
     if (connect_timer_) {
         esp_timer_stop(static_cast<esp_timer_handle_t>(connect_timer_));
     }
-    ESP_ERROR_CHECK(esp_wifi_stop());
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    WifiOp(esp_wifi_stop(), "wifi_stop");
+    if (WifiOp(esp_wifi_set_mode(WIFI_MODE_AP), "set_mode AP") != ESP_OK) {
+        return;
+    }
 
     wifi_config_t cfg = {};
     strncpy(reinterpret_cast<char*>(cfg.ap.ssid), ap_ssid_.c_str(), sizeof(cfg.ap.ssid) - 1);
@@ -200,8 +256,10 @@ void WifiService::StartSoftAp() {
     cfg.ap.max_connection = 4;
     cfg.ap.authmode = WIFI_AUTH_OPEN;
     cfg.ap.ssid_hidden = 0;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    if (WifiOp(esp_wifi_set_config(WIFI_IF_AP, &cfg), "set_config AP") != ESP_OK ||
+        WifiOp(esp_wifi_start(), "wifi_start AP") != ESP_OK) {
+        return;
+    }
     StartHttp();
     SetPhase(WifiPhase::ConfigAp);
     ESP_LOGI(TAG, "SoftAP %s  %s", ap_ssid_.c_str(), ap_url_.c_str());
@@ -243,17 +301,21 @@ void WifiService::StopHttp() {
     httpd_ = nullptr;
 }
 
-void WifiService::WifiEventHandler(void* arg, esp_event_base_t base, int32_t id, void* data) {
+void WifiService::WifiEventHandler(void* arg, esp_event_base_t base, int32_t id, void* /*data*/) {
     auto* self = static_cast<WifiService*>(arg);
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         if (self->phase_ == WifiPhase::Connected) {
             ESP_LOGW(TAG, "STA disconnected");
+            AppEvent drop;
+            drop.type = AppEventType::WifiDropped;
+            AppEventPost(drop);
             self->SetPhase(WifiPhase::Failed);
         }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         if (self->connect_timer_) {
             esp_timer_stop(static_cast<esp_timer_handle_t>(self->connect_timer_));
         }
+        self->MarkLastOk();
         self->SetPhase(WifiPhase::Connected);
         ESP_LOGI(TAG, "STA got IP");
     }
@@ -262,8 +324,7 @@ void WifiService::WifiEventHandler(void* arg, esp_event_base_t base, int32_t id,
 void WifiService::ConnectTimeout(void* arg) {
     auto* self = static_cast<WifiService*>(arg);
     if (self->phase_ == WifiPhase::ConnectingSta) {
-        ESP_LOGW(TAG, "STA timeout → SoftAP");
-        self->StartSoftAp();
+        self->TryNextOrAp();
     }
 }
 
@@ -277,13 +338,13 @@ esp_err_t WifiService::HttpRoot(httpd_req_t* req) {
         "</p><form method='POST' action='/save'>"
         "Wi-Fi 名称<br><input name='ssid' required><br><br>"
         "密码<br><input name='password' type='password'><br><br>"
+        "<p>最多保存 3 组，连接失败会自动试下一组。</p>"
         "<button type='submit'>连接</button></form></body></html>";
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, html.c_str(), html.size());
 }
 
 esp_err_t WifiService::HttpSave(httpd_req_t* req) {
-    auto* self = static_cast<WifiService*>(req->user_ctx);
     const size_t len = req->content_len;
     if (len == 0 || len > 512) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad form");
@@ -312,11 +373,14 @@ esp_err_t WifiService::HttpSave(httpd_req_t* req) {
     WifiCredentials cred;
     cred.ssid = ssid;
     cred.password = password;
-    WifiNvsSave(cred);
+    WifiNvsUpsert(cred);
     const char* ok = "<!doctype html><meta charset='utf-8'><p>已保存，设备正在连接…</p>";
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_send(req, ok, HTTPD_RESP_USE_STRLEN);
-    self->ConnectSta();
+    // Do NOT call ConnectSta/StopHttp here — would deadlock httpd joining itself.
+    AppEvent ev;
+    ev.type = AppEventType::WifiConnectRequested;
+    AppEventPost(ev);
     return ESP_OK;
 }
 
