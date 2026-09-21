@@ -8,6 +8,7 @@
 #include <esp_http_client.h>
 #include <esp_log.h>
 #include <esp_random.h>
+#include <sdkconfig.h>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -24,6 +25,9 @@ struct HttpBuffer {
 
 esp_err_t HttpEventHandler(esp_http_client_event_t* evt) {
     auto* buf = static_cast<HttpBuffer*>(evt->user_data);
+    if (!buf) {
+        return ESP_OK;
+    }
     if (evt->event_id == HTTP_EVENT_ON_DATA && evt->data && evt->data_len > 0) {
         if (buf->data.size() + evt->data_len > static_cast<size_t>(kMaxResponseBytes)) {
             return ESP_FAIL;
@@ -61,11 +65,58 @@ MeetApi& MeetApi::Instance() {
 }
 
 void MeetApi::Configure(const std::string& server_origin, const std::string& bearer_token) {
-    origin_ = server_origin;
-    while (!origin_.empty() && origin_.back() == '/') {
-        origin_.pop_back();
+    std::string next = server_origin;
+    while (!next.empty() && next.back() == '/') {
+        next.pop_back();
+    }
+    if (next != origin_) {
+        DestroyClient();
+        origin_ = std::move(next);
     }
     bearer_ = bearer_token;
+}
+
+void MeetApi::ReleaseConnection() {
+    if (!client_) {
+        return;
+    }
+    esp_http_client_close(client_);
+    ESP_LOGI(TAG, "connection released (handle kept for session ticket)");
+}
+
+void MeetApi::DestroyClient() {
+    if (!client_) {
+        return;
+    }
+    esp_http_client_cleanup(client_);
+    client_ = nullptr;
+    ESP_LOGI(TAG, "client destroyed");
+}
+
+esp_err_t MeetApi::EnsureClient() {
+    if (client_) {
+        return ESP_OK;
+    }
+    if (origin_.empty()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_http_client_config_t config = {};
+    config.url = origin_.c_str();
+    config.timeout_ms = 15000;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.event_handler = HttpEventHandler;
+    config.keep_alive_enable = true;
+#if CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
+    config.save_client_session = true;
+#endif
+
+    client_ = esp_http_client_init(&config);
+    if (!client_) {
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "client created for %s", origin_.c_str());
+    return ESP_OK;
 }
 
 esp_err_t MeetApi::HttpJson(const char* method,
@@ -77,40 +128,46 @@ esp_err_t MeetApi::HttpJson(const char* method,
         return ESP_ERR_INVALID_STATE;
     }
 
+    esp_err_t err = EnsureClient();
+    if (err != ESP_OK) {
+        return err;
+    }
+
     const std::string url = origin_ + path;
     HttpBuffer buf;
+    esp_http_client_set_user_data(client_, &buf);
+    esp_http_client_set_url(client_, url.c_str());
 
-    esp_http_client_config_t config = {};
-    config.url = url.c_str();
-    config.method = HTTP_METHOD_GET;
-    config.timeout_ms = 15000;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
-    config.event_handler = HttpEventHandler;
-    config.user_data = &buf;
-
+    esp_http_client_method_t http_method = HTTP_METHOD_GET;
     if (strcmp(method, "POST") == 0) {
-        config.method = HTTP_METHOD_POST;
+        http_method = HTTP_METHOD_POST;
     } else if (strcmp(method, "PATCH") == 0) {
-        config.method = HTTP_METHOD_PATCH;
+        http_method = HTTP_METHOD_PATCH;
     }
+    esp_http_client_set_method(client_, http_method);
 
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        return ESP_FAIL;
-    }
-
-    esp_http_client_set_header(client, "Accept", "application/json");
-    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client_, "Accept", "application/json");
+    esp_http_client_set_header(client_, "Content-Type", "application/json");
     if (!bearer_.empty()) {
         const std::string auth = "Bearer " + bearer_;
-        esp_http_client_set_header(client, "Authorization", auth.c_str());
-    }
-    if (body_json) {
-        esp_http_client_set_post_field(client, body_json, strlen(body_json));
+        esp_http_client_set_header(client_, "Authorization", auth.c_str());
+    } else {
+        esp_http_client_delete_header(client_, "Authorization");
     }
 
-    esp_err_t err = esp_http_client_perform(client);
-    const int status = esp_http_client_get_status_code(client);
+    // Clear leftover POST body from a previous request (required by IDF).
+    if (body_json) {
+        esp_http_client_set_post_field(client_, body_json, strlen(body_json));
+    } else {
+        esp_http_client_set_post_field(client_, nullptr, 0);
+    }
+
+    const bool reuse = esp_http_client_get_state(client_) >= HTTP_STATE_CONNECTED;
+    ESP_LOGI(TAG, "%s %s (%s) heap_int=%u", method, path.c_str(), reuse ? "reuse" : "handshake",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+
+    err = esp_http_client_perform(client_);
+    const int status = esp_http_client_get_status_code(client_);
     if (status_out) {
         *status_out = status;
     }
@@ -129,8 +186,8 @@ esp_err_t MeetApi::HttpJson(const char* method,
         ESP_LOGW(TAG, "%s %s failed: %s status=%d heap_int=%u", method, path.c_str(),
                  esp_err_to_name(err), status,
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+        ReleaseConnection();
     }
-    esp_http_client_cleanup(client);
     return err;
 }
 

@@ -3,6 +3,7 @@
 #include "meet_realtime.h"
 
 #include <esp_err.h>
+#include <esp_http_client.h>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,9 @@ public:
 
     void Configure(const std::string& server_origin, const std::string& bearer_token);
 
+    /** Close TCP/TLS but keep the client handle (session ticket retained). */
+    void ReleaseConnection();
+
     esp_err_t CreatePairingSession(MeetPairingSession& out, const std::string& display_name);
     esp_err_t PollPairingSession(const std::string& session_id, MeetPairingPollResult& out);
     esp_err_t ListCharacters(std::vector<MeetCharacter>& out);
@@ -77,6 +81,9 @@ public:
 private:
     MeetApi() = default;
 
+    esp_err_t EnsureClient();
+    void DestroyClient();
+
     esp_err_t HttpJson(const char* method,
                        const std::string& path,
                        const char* body_json,
@@ -85,6 +92,7 @@ private:
 
     std::string origin_;
     std::string bearer_;
+    esp_http_client_handle_t client_ = nullptr;
 };
 
 }  // namespace meet

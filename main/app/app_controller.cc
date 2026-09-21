@@ -140,6 +140,7 @@ void AppController::HandleEvent(const AppEvent& ev) {
             HandleWifiPhase(static_cast<WifiPhase>(ev.i32));
             break;
         case AppEventType::WifiDropped:
+            MeetApi::Instance().ReleaseConnection();
             PlayAudioCue(AudioCue::Lost);
             UiShowToast("网络已断开");
             break;
@@ -240,6 +241,7 @@ void AppController::ApplyOnlineState() {
 void AppController::HandleWifiPhase(WifiPhase phase) {
     switch (phase) {
         case WifiPhase::ConfigAp:
+            MeetApi::Instance().ReleaseConnection();
             if (state_.Get() == AppState::InCall || state_.Get() == AppState::Connecting) {
                 LeaveInCall();
             }
@@ -248,6 +250,7 @@ void AppController::HandleWifiPhase(WifiPhase phase) {
                              WifiService::Instance().ap_url().c_str());
             break;
         case WifiPhase::ConnectingSta:
+            MeetApi::Instance().ReleaseConnection();
             EnterUnprovisioned();
             UiShowWifiConnecting(WifiService::Instance().sta_ssid().c_str());
             break;
@@ -259,6 +262,7 @@ void AppController::HandleWifiPhase(WifiPhase phase) {
             ApplyOnlineState();
             break;
         case WifiPhase::Failed:
+            MeetApi::Instance().ReleaseConnection();
             was_connected_ = false;
             EnterUnprovisioned();
             UiShowUnprovisioned();
@@ -519,6 +523,9 @@ void AppController::EnterConnecting() {
     if (Settings::Instance().account_type() == "child") {
         MeetApi::Instance().TeachingPrepareChatOnly(conversation_id_);
     }
+
+    // Drop MeetApi HTTPS before WSS so we never hold two TLS sessions.
+    MeetApi::Instance().ReleaseConnection();
 
     MeetRealtimeSessionConfig session_cfg;
     session_cfg.voice = runtime_cache_.voice;
