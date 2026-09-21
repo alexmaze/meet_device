@@ -26,7 +26,7 @@ private:
     void PeriodicWork();
 
     void OnBootClick();
-    void OnBootLongPress();
+    void OnBootDoubleClick();
     void OnVolumeKey(int delta);
 
     void EnterPairing();

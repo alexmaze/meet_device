@@ -29,7 +29,7 @@ Meet 终端不是「又一个小智盒子」，而是家庭里的 Meet 角色实
 ```
 
 1. **WifiProvisioning**（学太空舱 SoftAP，换皮）  
-   无 Wi-Fi，或长按 Boot / 设置「重新配网」→ SoftAP（SSID `Meet-XXXX`，不用 `Xiaozhi`）→ 手机连热点、浏览器填家里 Wi-Fi → 写入 NVS → STA，约 60 秒超时再回配网。不做 BluFi / 声波配网。
+   无 Wi-Fi，或设置「重新配网」→ SoftAP（SSID `Meet-XXXX`，不用 `Xiaozhi`）→ 手机连热点、浏览器填家里 Wi-Fi → 写入 NVS → STA，约 60 秒超时再回配网。不做 BluFi / 声波配网。长按 Boot 是外壳关机，不能当配网入口。
 
 2. **Pairing**（学小智激活码，换协议）  
    屏上 6 位 **PairingCode** → 网页「我的 → 陪伴设备」claim → 轮询拿到一次性 **DeviceCredential**。过期重申；失败不得一直显示 `------`。

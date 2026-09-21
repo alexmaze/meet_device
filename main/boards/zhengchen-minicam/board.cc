@@ -20,7 +20,8 @@ constexpr char TAG[] = "board";
 constexpr int kBacklightLedcChannel = LEDC_CHANNEL_0;
 constexpr int kBacklightLedcTimer = LEDC_TIMER_0;
 constexpr int kDebounceMs = 40;
-constexpr int kLongPressMs = 3000;
+constexpr int kDoubleClickMs = 400;
+constexpr int kMaxClickMs = 800;
 
 }  // namespace
 
@@ -171,8 +172,9 @@ esp_err_t Board::InitBootButton() {
 void Board::BootButtonTask(void* arg) {
     auto* self = static_cast<Board*>(arg);
     bool holding = false;
-    bool long_fired = false;
     TickType_t down_tick = 0;
+    int pending_clicks = 0;
+    TickType_t last_up_tick = 0;
 
     while (true) {
         const int level = gpio_get_level(BOOT_BUTTON_GPIO);
@@ -184,23 +186,32 @@ void Board::BootButtonTask(void* arg) {
                     continue;
                 }
                 holding = true;
-                long_fired = false;
                 down_tick = xTaskGetTickCount();
-            } else if (!long_fired &&
-                       (xTaskGetTickCount() - down_tick) > pdMS_TO_TICKS(kLongPressMs)) {
-                long_fired = true;
-                AppEvent ev;
-                ev.type = AppEventType::BootLongPress;
-                AppEventPost(ev);
             }
+            // Long press is hardware power-off; firmware does not consume it.
         } else if (holding) {
             holding = false;
-            if (!long_fired) {
-                // Immediate click — no double-click wait.
-                AppEvent ev;
-                ev.type = AppEventType::BootClick;
-                AppEventPost(ev);
+            const TickType_t held = xTaskGetTickCount() - down_tick;
+            if (held <= pdMS_TO_TICKS(kMaxClickMs)) {
+                ++pending_clicks;
+                last_up_tick = xTaskGetTickCount();
+                if (pending_clicks >= 2) {
+                    AppEvent ev;
+                    ev.type = AppEventType::BootDoubleClick;
+                    AppEventPost(ev);
+                    pending_clicks = 0;
+                }
+            } else {
+                pending_clicks = 0;
             }
+        }
+
+        if (pending_clicks == 1 && !holding &&
+            (xTaskGetTickCount() - last_up_tick) > pdMS_TO_TICKS(kDoubleClickMs)) {
+            AppEvent ev;
+            ev.type = AppEventType::BootClick;
+            AppEventPost(ev);
+            pending_clicks = 0;
         }
         vTaskDelay(pdMS_TO_TICKS(20));
         (void)self;

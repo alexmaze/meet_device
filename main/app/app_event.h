@@ -8,7 +8,7 @@ namespace meet {
 
 enum class AppEventType : uint8_t {
     BootClick,
-    BootLongPress,
+    BootDoubleClick,
     VolumeKey,
     WakeDetected,
     WifiPhaseChanged,

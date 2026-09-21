@@ -125,8 +125,8 @@ void AppController::HandleEvent(const AppEvent& ev) {
         case AppEventType::BootClick:
             OnBootClick();
             break;
-        case AppEventType::BootLongPress:
-            OnBootLongPress();
+        case AppEventType::BootDoubleClick:
+            OnBootDoubleClick();
             break;
         case AppEventType::VolumeKey:
             OnVolumeKey(static_cast<int>(ev.i32));
@@ -304,7 +304,7 @@ void AppController::OnBootClick() {
     }
 }
 
-void AppController::OnBootLongPress() {
+void AppController::OnBootDoubleClick() {
     NoteCallActivity();
     if (state_.Get() == AppState::Settings) {
         char_browse_mode_ = false;

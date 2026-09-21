@@ -26,10 +26,10 @@ idf.py build
 
 1. 设备联网后进入 **Pairing**，向 `POST /api/devices/pairing-sessions` 申请 6 位码并显示
 2. 家庭成员在网页「我的 → 陪伴设备」输入配对码完成绑定，设备轮询拿到 **DeviceCredential**
-3. **Ready**：Boot 单击 / 唤醒词进入 **InCall**；长按进设置（切角色、重新配对、重新配网、检查更新）
+3. **Ready**：Boot 单击 / 唤醒词进入 **InCall**；双击进设置（切角色、重新配对、重新配网、检查更新）
 4. **InCall**：建会话 → 儿童 `chat_only` prepare → WebSocket PCM 全双工；插话清空播放队列；IdleHangup 后 `complete`
 
-按键：Boot 单击接通/挂断（设置内激活项）；Boot 长按进出设置；音量键调音量（设置内上下移动）。
+按键：Boot 单击接通/挂断（设置内激活项）；Boot 双击进出设置；Boot 长按是外壳关机；音量键调音量（设置内上下移动）。
 
 ## 架构要点
 
