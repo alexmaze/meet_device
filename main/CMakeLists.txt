@@ -7,6 +7,7 @@ idf_component_register(
         "app/app_controller.cc"
         "app/settings.cc"
         "ui/ui.cc"
+        "ui/ui_view.cc"
         "ui/ui_face.cc"
         "ui/fonts/font_meet_cjk_16_4.c"
         "meet/factory_nvs.cc"

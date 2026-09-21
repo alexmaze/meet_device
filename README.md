@@ -16,6 +16,19 @@ idf.py build
 # idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
+### Mac 上预览 UI（不用烧录）
+
+同一套 `main/ui` 控件 / CJK 字体 / 黄脸，桌面 SDL 窗口秒编：
+
+```bash
+# 依赖：brew install sdl2
+cmake -S host/ui_preview -B build/ui_preview
+cmake --build build/ui_preview
+./build/ui_preview/meet_ui_preview
+```
+
+按键：`1`–`7` 切页面，`e` 表情，`t` toast，`c` 字幕，`o` 横竖屏，`q` 退出。真机仍需验 ST7789 颜色和按键手感。
+
 `menuconfig` 中可改：
 
 - `MEET_SERVER_URL`：家庭 Meet Origin（默认 `https://meet.refme.cc`）
