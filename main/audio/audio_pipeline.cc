@@ -47,27 +47,9 @@ esp_err_t AudioPipeline::Init() {
         ESP_LOGI(TAG, "ES8388 ready @ %d Hz", AUDIO_INPUT_SAMPLE_RATE);
     }
 
-    const int channels = codec_ready_ ? Es8388Codec::Instance().input_channels() : 2;
-    const bool has_ref = AUDIO_INPUT_REFERENCE;
-
-    if (g_afe_vc.Init(AfeUnitType::VoiceComm, channels, has_ref, aec_enabled_, "afe_vc", 6144,
-                      5) == ESP_OK) {
-        g_afe_vc.SetOutputHandler(
-            [this](const int16_t* data, size_t samples) { OnAfeOutput(data, samples); });
-    } else {
-        ESP_LOGW(TAG, "AFE VC unavailable; InCall uses mic channel 0");
-    }
-
-    if (g_afe_wake.Init(AfeUnitType::WakeWord, channels, has_ref, false, "afe_sr", 4096, 3) ==
-        ESP_OK) {
-        g_afe_wake.SetWakeHandler([]() {
-            AppEvent ev;
-            ev.type = AppEventType::WakeDetected;
-            AppEventPost(ev);
-        });
-    } else {
-        ESP_LOGW(TAG, "wake AFE unavailable; Boot remains the call trigger");
-    }
+    // Do not create AFE at boot. Two instances both mmap wn9 from flash and the
+    // second hits `assert xQueueSemaphoreTake` in hufzip get_flash_index.
+    // P0 uses Boot to start a Call; wake-word AFE is deferred to Listen.
 
     // Resident tasks — never destroyed.
     xTaskCreate(CaptureTask, "pcm_cap", 4096, this, 6, nullptr);
@@ -77,6 +59,30 @@ esp_err_t AudioPipeline::Init() {
         Es8388Codec::Instance().EnableOutput(true);
     }
     return ESP_OK;
+}
+
+void AudioPipeline::EnsureVcAfe() {
+    if (g_afe_vc.ready()) {
+        return;
+    }
+    const int channels = codec_ready_ ? Es8388Codec::Instance().input_channels() : 2;
+    if (g_afe_vc.Init(AfeUnitType::VoiceComm, channels, AUDIO_INPUT_REFERENCE, aec_enabled_,
+                      "afe_vc", 6144, 5) == ESP_OK) {
+        g_afe_vc.SetOutputHandler(
+            [this](const int16_t* data, size_t samples) { OnAfeOutput(data, samples); });
+    } else {
+        ESP_LOGW(TAG, "AFE VC unavailable; InCall uses mic channel 0");
+    }
+}
+
+void AudioPipeline::EnsureWakeAfe() {
+    // Loading wn9 a second time (or at the same time as VC) asserts in esp-sr.
+    // Boot remains the P0 call trigger.
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        ESP_LOGW(TAG, "wake AFE skipped; press Boot to start a call");
+    }
 }
 
 void AudioPipeline::ApplyMode(PcmMode next) {
@@ -102,11 +108,13 @@ void AudioPipeline::ApplyMode(PcmMode next) {
     Es8388Codec::Instance().EnableOutput(true);
 
     if (next == PcmMode::Listen) {
+        EnsureWakeAfe();
         if (g_afe_wake.ready()) {
             g_afe_wake.Start();
         }
-        ESP_LOGI(TAG, "mode=Listen");
+        ESP_LOGI(TAG, "mode=Listen wake=%d", g_afe_wake.ready() ? 1 : 0);
     } else if (next == PcmMode::Call) {
+        EnsureVcAfe();
         if (aec_enabled_ && g_afe_vc.ready()) {
             g_afe_vc.Start();
         }

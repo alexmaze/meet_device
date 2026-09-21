@@ -49,8 +49,10 @@
 
 #define DISPLAY_WIDTH_1  320
 #define DISPLAY_HEIGHT_1 240
-#define DISPLAY_MIRROR_X_1 true
-#define DISPLAY_MIRROR_Y_1 false
+// Xiaozhi _1 is MX=true,MY=false. Meet uses hardware landscape without LVGL
+// software rotation, so that combination appears 180° inverted on 太空舱.
+#define DISPLAY_MIRROR_X_1 false
+#define DISPLAY_MIRROR_Y_1 true
 #define DISPLAY_SWAP_XY_1 true
 
 #define DISPLAY_INVERT_COLOR    true

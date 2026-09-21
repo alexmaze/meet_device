@@ -57,6 +57,7 @@ I2S 默认 **16 kHz**（与 AFE / 上行对齐）；下行 24 kHz 经抗混叠�
 ## 领域词与方案
 
 - 领域词：[CONTEXT.md](./CONTEXT.md)
+- 硬件手册（太空舱 / zhengchen-minicam）：[docs/hardware-zhengchen-minicam.md](./docs/hardware-zhengchen-minicam.md)
 - 整机产品与技术方案：[docs/product-and-architecture.md](./docs/product-and-architecture.md)
 - 协议边界：[docs/adr/0001-meet-pcm-over-xiaozhi-protocol.md](./docs/adr/0001-meet-pcm-over-xiaozhi-protocol.md)
 - 工程策略：[docs/adr/0002-port-minicam-layers-not-fork-xiaozhi.md](./docs/adr/0002-port-minicam-layers-not-fork-xiaozhi.md)

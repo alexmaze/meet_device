@@ -5,8 +5,12 @@ Lean firmware domain language for the ESP32 companion device. Keep terms stable 
 ## Language
 
 **CompanionDevice**:
-Physical Meet companion hardware (征辰 minicam / 太空舱 form factor). Runs this firmware. Owns local UI, audio duplex, and device-side credentials.
-_Avoid_: Xiaozhi box, phone browser client, agent device
+Physical Meet companion hardware. Canonical product shape is **太空舱** (engineering board `zhengchen-minicam`). Runs this firmware. Owns local UI, audio duplex, and device-side credentials.
+_Avoid_: Xiaozhi box, phone browser client, agent device, zhengchen-cam (different codec/pins)
+
+**太空舱**:
+The sitting, landscape-oriented minicam CompanionDevice this firmware targets. Same object as CompanionDevice in the current hardware generation.
+_Avoid_: 竖屏默认、官方 zhengchen-cam、任意 ESP32 小智盒子
 
 **WifiProvisioning**:
 The device is collecting or joining household Wi-Fi (SoftAP or STA connect). Distinct from account Pairing.

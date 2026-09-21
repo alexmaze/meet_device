@@ -19,6 +19,8 @@ class WifiService {
 public:
     static WifiService& Instance();
 
+    /** Bring up the Wi-Fi driver before audio/AFE so the wifi task can get internal RAM. */
+    esp_err_t Init();
     esp_err_t Start();
     void EnterConfigMode();
     /** Called from app task after SoftAP form save (avoids httpd self-stop deadlock). */
@@ -54,6 +56,7 @@ private:
     bool inited_ = false;
     int try_index_ = 0;
     int try_count_ = 0;
+    int sta_retry_ = 0;
     WifiPhase phase_ = WifiPhase::Idle;
     std::string sta_ssid_;
     std::string ap_ssid_;

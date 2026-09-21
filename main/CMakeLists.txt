@@ -8,6 +8,7 @@ idf_component_register(
         "app/settings.cc"
         "ui/ui.cc"
         "ui/ui_face.cc"
+        "ui/fonts/font_meet_cjk_16_4.c"
         "meet/factory_nvs.cc"
         "meet/meet_api.cc"
         "meet/meet_realtime.cc"

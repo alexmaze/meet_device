@@ -118,7 +118,7 @@ NVS 分三块：
 - `meet`：origin、DeviceCredential、deviceId、SelectedCharacter、横竖屏、音量
 - `factory`：写一次的序列号（空则按 MAC 生成 `MEET-XXXXXX`）
 
-16MB 分区：`ota_0` / `ota_1` 各 4MB，语音模型在 `0x820000`。OTA 走 Meet HTTPS，校验 sha256 后切分区重启。
+16MB 分区：`ota_0` / `ota_1` 各 5MB（`0x20000` / `0x520000`），语音模型在 `0xA20000`。OTA 走 Meet HTTPS，校验 sha256 后切分区重启。详见 [硬件手册](./hardware-zhengchen-minicam.md)。
 
 ## 协议稳健性
 

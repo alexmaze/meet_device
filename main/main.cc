@@ -3,6 +3,7 @@
 #include "audio_pipeline.h"
 #include "board.h"
 #include "ui.h"
+#include "wifi_service.h"
 
 #include <sdkconfig.h>
 #include <esp_event.h>
@@ -43,6 +44,8 @@ extern "C" void app_main(void) {
 
     ESP_ERROR_CHECK(meet::Board::Instance().Init());
     ESP_ERROR_CHECK(meet::UiInit());
+    // Wi-Fi must come up before AFE: the wifi task needs internal RAM that AFE would consume.
+    ESP_ERROR_CHECK(meet::WifiService::Instance().Init());
     ESP_ERROR_CHECK(meet::AudioPipeline::Instance().Init());
     ESP_ERROR_CHECK(meet::AppController::Instance().Start());
 

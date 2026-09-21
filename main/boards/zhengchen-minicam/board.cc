@@ -89,9 +89,11 @@ esp_err_t Board::InitSpiLcd() {
     esp_lcd_panel_reset(lcd_panel_);
     esp_lcd_panel_init(lcd_panel_);
     esp_lcd_panel_invert_color(lcd_panel_, DISPLAY_INVERT_COLOR);
-    ApplyOrientation(false);
+    // 太空舱默认横放；镜像与小智 _1 对调，避免硬件横屏倒置。
+    ApplyOrientation(true);
     esp_lcd_panel_disp_on_off(lcd_panel_, true);
-    ESP_LOGI(TAG, "ST7789 %dx%d ready", DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    ESP_LOGI(TAG, "ST7789 logical %dx%d (landscape=%d)",
+             display_width(), display_height(), landscape_ ? 1 : 0);
     return ESP_OK;
 }
 

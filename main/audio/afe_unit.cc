@@ -53,8 +53,10 @@ esp_err_t AfeUnit::Init(AfeUnitType type,
 
     const afe_type_t afe_type =
         (type == AfeUnitType::WakeWord) ? AFE_TYPE_SR : AFE_TYPE_VC;
-    afe_config_t* cfg =
-        afe_config_init(fmt.c_str(), SrModels(), afe_type, AFE_MODE_HIGH_PERF);
+    // VoiceComm must not mmap wakenet: a second AFE loading the same flash model
+    // asserts in hufzip get_flash_index (null mmap mutex).
+    srmodel_list_t* models = (type == AfeUnitType::WakeWord) ? SrModels() : nullptr;
+    afe_config_t* cfg = afe_config_init(fmt.c_str(), models, afe_type, AFE_MODE_HIGH_PERF);
     if (!cfg) {
         ESP_LOGW(TAG, "afe_config_init failed type=%d", static_cast<int>(type));
         return ESP_FAIL;
@@ -70,6 +72,7 @@ esp_err_t AfeUnit::Init(AfeUnitType type,
         cfg->aec_init = enable_aec;
         cfg->vad_init = !enable_aec;
         cfg->agc_init = false;
+        cfg->wakenet_init = false;
     }
     cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 

@@ -4,12 +4,14 @@
 #include "wifi_nvs.h"
 
 #include <esp_event.h>
+#include <esp_heap_caps.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_netif.h>
 #include <esp_timer.h>
 #include <esp_wifi.h>
+#include <esp_wifi_types.h>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -19,7 +21,8 @@ namespace meet {
 namespace {
 
 constexpr char TAG[] = "wifi";
-constexpr int kConnectTimeoutSec = 20;
+constexpr int kConnectTimeoutSec = 60;
+constexpr int kStaRetryMax = 8;
 
 int HexVal(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -112,36 +115,62 @@ int WifiService::rssi() const {
     return ap.rssi;
 }
 
+esp_err_t WifiService::Init() {
+    return InitStack();
+}
+
 esp_err_t WifiService::InitStack() {
     if (inited_) {
         return ESP_OK;
     }
     BuildIdentity();
 
+    ESP_LOGI(TAG, "init, internal free=%u largest=%u",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
+
     sta_netif_ = esp_netif_create_default_wifi_sta();
     ap_netif_ = esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                                        WifiEventHandler, this, nullptr));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                                        WifiEventHandler, this, nullptr));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    esp_err_t err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init: %s (internal free=%u)", esp_err_to_name(err),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+        return err;
+    }
+    err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, WifiEventHandler, this,
+                                              nullptr);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, WifiEventHandler, this,
+                                              nullptr);
+    if (err != ESP_OK) {
+        return err;
+    }
+    (void)esp_wifi_set_storage(WIFI_STORAGE_RAM);
 
     esp_timer_create_args_t timer = {};
     timer.callback = ConnectTimeout;
     timer.arg = this;
     timer.dispatch_method = ESP_TIMER_TASK;
     timer.name = "wifi_sta";
-    ESP_ERROR_CHECK(esp_timer_create(&timer, reinterpret_cast<esp_timer_handle_t*>(&connect_timer_)));
+    err = esp_timer_create(&timer, reinterpret_cast<esp_timer_handle_t*>(&connect_timer_));
+    if (err != ESP_OK) {
+        return err;
+    }
 
     inited_ = true;
     return ESP_OK;
 }
 
 esp_err_t WifiService::Start() {
-    ESP_ERROR_CHECK(InitStack());
+    const esp_err_t err = InitStack();
+    if (err != ESP_OK) {
+        SetPhase(WifiPhase::Failed);
+        return err;
+    }
     WifiNetworkList list;
     WifiNvsLoadAll(list);
     if (list.count <= 0) {
@@ -187,6 +216,7 @@ void WifiService::ConnectStaIndex(int index) {
         index = 0;
     }
     try_index_ = index;
+    sta_retry_ = 0;
     const WifiCredentials& cred = list.items[index];
     sta_ssid_ = cred.ssid;
     StopHttp();
@@ -200,20 +230,27 @@ void WifiService::ConnectStaIndex(int index) {
     strncpy(reinterpret_cast<char*>(cfg.sta.ssid), cred.ssid.c_str(), sizeof(cfg.sta.ssid) - 1);
     strncpy(reinterpret_cast<char*>(cfg.sta.password), cred.password.c_str(),
             sizeof(cfg.sta.password) - 1);
-    cfg.sta.threshold.authmode = cred.password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
-    if (WifiOp(esp_wifi_set_config(WIFI_IF_STA, &cfg), "set_config") != ESP_OK ||
-        WifiOp(esp_wifi_start(), "wifi_start") != ESP_OK) {
+    cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    cfg.sta.failure_retry_cnt = 5;
+    cfg.sta.threshold.authmode = cred.password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA_PSK;
+    if (WifiOp(esp_wifi_set_config(WIFI_IF_STA, &cfg), "set_config") != ESP_OK) {
         StartSoftAp();
         return;
     }
-    WifiOp(esp_wifi_connect(), "wifi_connect");
+    // Phase must be ConnectingSta before esp_wifi_start(): STA_START is handled on the
+    // higher-priority event loop and can run before this function continues.
     if (connect_timer_) {
         esp_timer_stop(static_cast<esp_timer_handle_t>(connect_timer_));
         esp_timer_start_once(static_cast<esp_timer_handle_t>(connect_timer_),
                              static_cast<uint64_t>(kConnectTimeoutSec) * 1000000ULL);
     }
     SetPhase(WifiPhase::ConnectingSta);
-    ESP_LOGI(TAG, "STA connecting to %s (%d/%d)", cred.ssid.c_str(), index + 1, list.count);
+    ESP_LOGI(TAG, "STA starting, will connect %s (%d/%d)", cred.ssid.c_str(), index + 1, list.count);
+    if (WifiOp(esp_wifi_start(), "wifi_start") != ESP_OK) {
+        StartSoftAp();
+        return;
+    }
 }
 
 void WifiService::TryNextOrAp() {
@@ -301,11 +338,31 @@ void WifiService::StopHttp() {
     httpd_ = nullptr;
 }
 
-void WifiService::WifiEventHandler(void* arg, esp_event_base_t base, int32_t id, void* /*data*/) {
+void WifiService::WifiEventHandler(void* arg, esp_event_base_t base, int32_t id, void* data) {
     auto* self = static_cast<WifiService*>(arg);
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (self->phase_ == WifiPhase::Connected) {
-            ESP_LOGW(TAG, "STA disconnected");
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        if (self->phase_ == WifiPhase::ConnectingSta) {
+            ESP_LOGI(TAG, "STA start, connecting to %s", self->sta_ssid_.c_str());
+            WifiOp(esp_wifi_connect(), "wifi_connect");
+        } else {
+            ESP_LOGW(TAG, "STA start ignored, phase=%d", static_cast<int>(self->phase_));
+        }
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        const auto* disc = static_cast<const wifi_event_sta_disconnected_t*>(data);
+        const int reason = disc ? disc->reason : 0;
+        if (self->phase_ == WifiPhase::ConnectingSta) {
+            self->sta_retry_ += 1;
+            ESP_LOGW(TAG, "STA disconnect reason=%d retry=%d/%d", reason, self->sta_retry_,
+                     kStaRetryMax);
+            if (self->sta_retry_ < kStaRetryMax) {
+                WifiOp(esp_wifi_connect(), "wifi_reconnect");
+            } else if (self->connect_timer_) {
+                // Don't esp_wifi_stop() on the wifi event task; let the timer hop off it.
+                esp_timer_stop(static_cast<esp_timer_handle_t>(self->connect_timer_));
+                esp_timer_start_once(static_cast<esp_timer_handle_t>(self->connect_timer_), 100000);
+            }
+        } else if (self->phase_ == WifiPhase::Connected) {
+            ESP_LOGW(TAG, "STA dropped reason=%d", reason);
             AppEvent drop;
             drop.type = AppEventType::WifiDropped;
             AppEventPost(drop);
@@ -315,6 +372,7 @@ void WifiService::WifiEventHandler(void* arg, esp_event_base_t base, int32_t id,
         if (self->connect_timer_) {
             esp_timer_stop(static_cast<esp_timer_handle_t>(self->connect_timer_));
         }
+        self->sta_retry_ = 0;
         self->MarkLastOk();
         self->SetPhase(WifiPhase::Connected);
         ESP_LOGI(TAG, "STA got IP");

@@ -56,6 +56,8 @@ private:
     AudioPipeline() = default;
 
     void ApplyMode(PcmMode next);
+    void EnsureVcAfe();
+    void EnsureWakeAfe();
     void OnAfeOutput(const int16_t* data, size_t samples);
     void PushUplinkFrame(const int16_t* mono, size_t samples);
 

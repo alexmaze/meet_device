@@ -10,14 +10,19 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <lvgl.h>
+#include "src/draw/sw/lv_draw_sw_utils.h"
 #include <cstdio>
 #include <cstring>
+
+extern "C" {
+LV_FONT_DECLARE(font_meet_cjk_16_4);
+}
 
 namespace meet {
 namespace {
 
 constexpr char TAG[] = "ui";
-constexpr int kMaxBufW = DISPLAY_WIDTH;
+constexpr int kMaxBufW = DISPLAY_WIDTH_1 > DISPLAY_WIDTH ? DISPLAY_WIDTH_1 : DISPLAY_WIDTH;
 constexpr int kQueueDepth = 16;
 
 enum class UiCmdType : uint8_t {
@@ -56,12 +61,8 @@ char emotion_name_[24] = "neutral";
 char caption_[160] = {};
 uint16_t face_buf_[kFaceSize * kFaceSize];
 
-#if !LV_FONT_SOURCE_HAN_SANS_SC_16_CJK
-#error "CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK must be enabled — Meet UI is Chinese-only"
-#endif
-
 const lv_font_t* UiFont() {
-    return &lv_font_source_han_sans_sc_16_cjk;
+    return &font_meet_cjk_16_4;
 }
 
 void PostCmd(const UiCommand& cmd) {
@@ -75,27 +76,29 @@ void PostCmd(const UiCommand& cmd) {
 
 void Relayout() {
     if (!screen_) return;
-    const int w = DISPLAY_WIDTH;
+    const int w = Board::Instance().display_width();
+    const bool landscape = Board::Instance().landscape();
     if (status_label_) {
         lv_obj_set_width(status_label_, w - 16);
-        lv_obj_align(status_label_, LV_ALIGN_TOP_MID, 0, 4);
+        lv_obj_align(status_label_, LV_ALIGN_TOP_MID, 0, landscape ? 2 : 4);
     }
     if (face_canvas_) {
-        lv_obj_align(face_canvas_, LV_ALIGN_TOP_MID, 0, 22);
+        lv_obj_align(face_canvas_, LV_ALIGN_TOP_MID, 0, landscape ? 18 : 22);
         if (face_visible_) lv_obj_clear_flag(face_canvas_, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(face_canvas_, LV_OBJ_FLAG_HIDDEN);
     }
     if (title_label_) {
         lv_obj_set_width(title_label_, w - 24);
-        lv_obj_align(title_label_, LV_ALIGN_TOP_MID, 0, face_visible_ ? 90 : 28);
+        const int title_y = face_visible_ ? (landscape ? 84 : 90) : (landscape ? 22 : 28);
+        lv_obj_align(title_label_, LV_ALIGN_TOP_MID, 0, title_y);
     }
     if (body_label_) {
         lv_obj_set_width(body_label_, w - 24);
-        lv_obj_align(body_label_, LV_ALIGN_CENTER, 0, face_visible_ ? 36 : 20);
+        lv_obj_align(body_label_, LV_ALIGN_CENTER, 0, face_visible_ ? (landscape ? 28 : 36) : (landscape ? 12 : 20));
     }
     if (toast_label_) {
         lv_obj_set_width(toast_label_, w - 32);
-        lv_obj_align(toast_label_, LV_ALIGN_BOTTOM_MID, 0, -8);
+        lv_obj_align(toast_label_, LV_ALIGN_BOTTOM_MID, 0, landscape ? -4 : -8);
     }
 }
 
@@ -233,8 +236,11 @@ void ApplyCommand(const UiCommand& cmd) {
 void FlushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
     auto panel = Board::Instance().lcd_panel();
     if (panel) {
+        const uint32_t px = static_cast<uint32_t>(area->x2 - area->x1 + 1) *
+                            static_cast<uint32_t>(area->y2 - area->y1 + 1);
+        // ST7789 SPI wants RGB565 big-endian; LVGL renders native LE.
+        lv_draw_sw_rgb565_swap(px_map, px);
         esp_lcd_panel_draw_bitmap(panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
-        // flush_ready is called from on_color_trans_done (UiNotifyFlushDone)
     } else {
         lv_display_flush_ready(disp);
     }
@@ -249,14 +255,16 @@ void UiNotifyFlushDone() {
 }
 
 esp_err_t UiInit() {
-    ESP_LOGI(TAG, "LVGL init for ST7789 %dx%d", DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    const int w = Board::Instance().display_width();
+    const int h = Board::Instance().display_height();
+    ESP_LOGI(TAG, "LVGL init for ST7789 %dx%d", w, h);
     g_ui_q = xQueueCreate(kQueueDepth, sizeof(UiCommand));
     if (!g_ui_q) {
         return ESP_ERR_NO_MEM;
     }
 
     lv_init();
-    display_ = lv_display_create(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    display_ = lv_display_create(w, h);
     if (!display_) {
         ESP_LOGE(TAG, "lv_display_create failed");
         return ESP_FAIL;

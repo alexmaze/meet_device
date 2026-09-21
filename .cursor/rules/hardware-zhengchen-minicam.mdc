@@ -1,0 +1,17 @@
+---
+description: 征辰 minicam / 太空舱板级事实。改引脚、LCD、音频、烧录或内存时必读。
+alwaysApply: true
+---
+
+# CompanionDevice 硬件（太空舱）
+
+完整手册：`docs/hardware-zhengchen-minicam.md`。板级只认 `zhengchen-minicam`，禁止抄 `zhengchen-cam`。
+
+- SoC：ESP32-S3 QFN56 + 8MB octal PSRAM + 16MB Flash。IDF 6.1。
+- 烧录：原生 USB-Serial/JTAG（Mac 常见 `/dev/cu.usbmodem11401`）。Boot 是 GPIO11，不是 GPIO0，按键不能进下载模式。
+- 屏：ST7789 SPI（MOSI41 CLK46 DC39 CS40 BL42 反向，RST=NC）。横放 320×240。Meet MADCTL：`SWAP_XY=1, MX=0, MY=1`。不要用小智 `DISPLAY_*_1`（会 180° 倒立）。
+- 中文：`main/ui/fonts/font_meet_cjk_16_4.c`，禁用 LVGL `source_han_sans_sc_16_cjk`。
+- 音频：ES8388 I2C `0x20`（SDA1 SCL2），I2S MCLK38 WS13 BCLK14 DIN12 DOUT45，带 AEC 参考。Meet 现 16 kHz 原生。
+- Boot GPIO11；音量 ADC GPIO9；电池 GPIO3 / 参考 GPIO4；状态线 GPIO47（通话=0）。
+- 摄像头 DVP 存在但 P0 关闭，I2C 与 codec 共用。
+- 内部 RAM 紧：Wi-Fi 先于 AFE；不要同时开两路带 wakenet 的 AFE。
