@@ -4,6 +4,7 @@
 
 #include <cJSON.h>
 #include <esp_crt_bundle.h>
+#include <esp_heap_caps.h>
 #include <esp_http_client.h>
 #include <esp_log.h>
 #include <esp_random.h>
@@ -120,10 +121,14 @@ esp_err_t MeetApi::HttpJson(const char* method,
             NotifyUnauthorized();
         }
         if (status < 200 || status >= 300) {
+            ESP_LOGW(TAG, "%s %s -> HTTP %d (%u bytes)", method, path.c_str(), status,
+                     static_cast<unsigned>(response_body.size()));
             err = ESP_FAIL;
         }
     } else {
-        ESP_LOGW(TAG, "%s %s failed: %s", method, path.c_str(), esp_err_to_name(err));
+        ESP_LOGW(TAG, "%s %s failed: %s status=%d heap_int=%u", method, path.c_str(),
+                 esp_err_to_name(err), status,
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
     }
     esp_http_client_cleanup(client);
     return err;
@@ -201,10 +206,14 @@ esp_err_t MeetApi::ListCharacters(std::vector<MeetCharacter>& out) {
     int status = 0;
     esp_err_t err = HttpJson("GET", "/api/characters", nullptr, body, &status);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "ListCharacters HTTP failed err=%s status=%d", esp_err_to_name(err),
+                 status);
         return err;
     }
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) {
+        ESP_LOGW(TAG, "ListCharacters invalid JSON (%u bytes)",
+                 static_cast<unsigned>(body.size()));
         return ESP_ERR_INVALID_RESPONSE;
     }
     const cJSON* arr = cJSON_GetObjectItem(root, "characters");
@@ -222,6 +231,7 @@ esp_err_t MeetApi::ListCharacters(std::vector<MeetCharacter>& out) {
         }
     }
     cJSON_Delete(root);
+    ESP_LOGI(TAG, "ListCharacters count=%u", static_cast<unsigned>(out.size()));
     return ESP_OK;
 }
 
